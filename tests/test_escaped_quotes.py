@@ -134,11 +134,12 @@ def test_unicode_escape_decoding_cannot_create_a_lexical_closer(prefix):
 
 @pytest.mark.parametrize("prefix", ["f", "F", "fr", "rf", pytest.param("t", marks=pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14"))])
 @pytest.mark.parametrize("quote", ["'", '"'])
-def test_interpolated_strings_are_not_treated_as_opaque_even_on_python311(prefix, quote):
-    parser = Parser()
-    assert parser.feed("value = " + prefix + quote * 3 + "first\n") == ()
-    assert parser._await_quote == quote * 3
-    assert parser._quote_opaque is False
+def test_interpolated_strings_skip_escaped_closers_without_delaying_real_boundaries(prefix, quote):
+    opening = "value = " + prefix + quote * 3 + "{name!r:>{width}} first\n"
+    body = "\\" * 31 + quote * 3 + " still inside\n"
+    closing = "\\" * 3 + quote * 4 + "\nnext_value = 1\n"
+    source = opening + body + closing
+    assert compare_chunks(source, [opening, *body, *closing]) == compare_chunks(source, source)
 
 
 @pytest.mark.parametrize("newline", NEWLINES)
@@ -159,7 +160,7 @@ def test_skipped_escaped_closers_preserve_native_finish_diagnostics(newline, rea
     assert parser.pending == source[parser.committed :]
 
 
-@pytest.mark.parametrize("prefix", ["", "r", "b", "br", "u"])
+@pytest.mark.parametrize("prefix", ["", "r", "b", "br", "u", "f", "rf", pytest.param("t", marks=pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14"))])
 @pytest.mark.parametrize("quote", ["'", '"'])
 def test_repeated_escaped_triple_quotes_have_linear_scanner_work(monkeypatch, prefix, quote):
     original_normalize = parser_module._normalize
@@ -199,3 +200,31 @@ def test_repeated_escaped_triple_quotes_have_linear_scanner_work(monkeypatch, pr
     for operation in small:
         assert large[operation] <= small[operation] * 5
         assert large[operation] < length * 12
+
+
+@pytest.mark.parametrize("prefix", ["f", "rf", pytest.param("t", marks=pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14"))])
+@pytest.mark.parametrize("quote", ["'", '"'])
+@pytest.mark.parametrize("newline", NEWLINES)
+def test_escaped_delimiters_inside_format_spec_do_not_hide_the_outer_closer(prefix, quote, newline):
+    triple = quote * 3
+    source = "value = " + prefix + triple + "{name:" + "\\" + triple + "literal}tail" + triple + "\nnext_value = 1\n"
+    source = source.replace("\n", newline)
+    assert compare_chunks(source, source) == compare_chunks(source, [source])
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 701 expression grammar requires Python 3.12")
+@pytest.mark.parametrize("prefix", ["f", "rf", pytest.param("t", marks=pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14"))])
+@pytest.mark.parametrize("quote", ["'", '"'])
+@pytest.mark.parametrize("newline", NEWLINES)
+def test_escaped_candidates_in_nested_strings_and_comments_preserve_every_emission(prefix, quote, newline):
+    triple = quote * 3
+    fixtures = [
+        "value = " + prefix + triple + "{(\n    1 # \\" + triple + " comment\n)} \\" + triple + " literal\n" + triple + "\n",
+        "value = " + prefix + triple + "{r" + triple + "inside \\" + triple + " decoy\ninner" + triple + "} outer \\" + triple + " decoy\n" + triple + "\n",
+        "value = " + prefix + quote + "{(\n    1 # \\" + quote + " comment\n)} \\" + quote + " literal" + quote + "\n",
+    ]
+    for literal in fixtures:
+        source = (literal + "next_value = 1\n").replace("\n", newline)
+        expected = compare_chunks(source, source)
+        for cut in range(len(source) + 1):
+            assert compare_chunks(source, [source[:cut], source[cut:]]) == expected

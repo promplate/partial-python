@@ -96,7 +96,6 @@ class _Boundary:
     delimiters: tuple[str, ...] = ()
     logical_root: bool = True
     quote: str = ""
-    opaque: bool = False
 
 
 def _quote_delimiter(token_text: str) -> str:
@@ -129,7 +128,7 @@ def _has_unescaped_closer(text: str, quote: str, before_window: bool) -> bool:
     return False
 
 
-def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tuple[int, int], bool] | None:
+def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tuple[int, int]] | None:
     eof = (source.count("\n") + 1, len(source.rsplit("\n", 1)[-1]))
     # Ask the host tokenizer to identify an opaque STRING crossing actual EOF.
     # Four quotes also close a trailing backslash. Never reinterpret an already
@@ -138,11 +137,7 @@ def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tupl
         try:
             for token in tokenize.generate_tokens(io.StringIO(source + quote * 4).readline):
                 if token.type == tokenize.STRING and last_end <= token.start < eof < token.end:
-                    quote = _quote_delimiter(token.string)
-                    # Pre-3.12 f-strings are opaque STRING tokens too; their
-                    # expression grammar must stay on the conservative path.
-                    prefix = token.string[: token.string.index(quote)].lower()
-                    return quote, token.start, "f" not in prefix and "t" not in prefix
+                    return _quote_delimiter(token.string), token.start
         except (tokenize.TokenError, IndentationError, SyntaxError, UnicodeError):
             pass
     return None
@@ -230,7 +225,7 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
         if string_quotes:
             yield _Boundary(0, "string", quote=string_quotes[0])
         elif opening := _unfinished_quote(prefix + source, last_end):
-            quote, position, opaque = opening
+            quote, position = opening
             if logical_start:
                 start = original_offsets[offset(position)]
                 # A host-proven string opener already excludes continuation
@@ -238,7 +233,7 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                 if logical_root:
                     yield _Boundary(start, "successor")
                 yield _Boundary(start, "started")
-            yield _Boundary(0, "string", quote=quote, opaque=opaque)
+            yield _Boundary(0, "string", quote=quote)
         # Valid earlier tokens remain useful even when the unfinished suffix is not tokenizable.
         return
 
@@ -256,7 +251,6 @@ class Parser:
         self._chunks: list[str] = []
         self._await_quote = ""
         self._quote_tail = ""
-        self._quote_opaque = False
         self._quote_tail_escaped = False
         self._offset = 0
         self._line = 1
@@ -301,8 +295,9 @@ class Parser:
             raise TypeError("delta must be str")
         if self._await_quote:
             window = self._quote_tail + delta
-            closer = _has_unescaped_closer(window, self._await_quote, self._quote_tail_escaped) if self._quote_opaque else self._await_quote in window
-            if not closer:
+            # Even f/t strings need an unescaped outer closer. Nested fields
+            # can cause extra retries; only the host tokenizer decides closure.
+            if not _has_unescaped_closer(window, self._await_quote, self._quote_tail_escaped):
                 if delta:
                     self._chunks.append(delta)
                     self._quote_tail, self._quote_tail_escaped = _quote_window(window, self._quote_tail_escaped)
@@ -331,7 +326,6 @@ class Parser:
                 if kind == "string":
                     if window_end == len(self._pending):
                         self._await_quote = boundary.quote
-                        self._quote_opaque = boundary.opaque
                         self._quote_tail, self._quote_tail_escaped = _quote_window(self._pending, False)
                     continue
                 if kind == "started":
