@@ -21,10 +21,14 @@ from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from overlap import execute_buffered
-from transport import MAX_RECORD_BYTES, record_bytes, source_deltas
-
 from partial_python import Executor
+
+if __package__:
+    from .overlap import execute_buffered
+    from .transport import MAX_RECORD_BYTES, record_bytes, source_deltas
+else:
+    from overlap import execute_buffered
+    from transport import MAX_RECORD_BYTES, record_bytes, source_deltas
 
 MAX_RECORDS = 128
 MAX_OUTPUT_BYTES = 1 << 16

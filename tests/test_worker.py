@@ -492,3 +492,62 @@ async def test_nonzero_teardown_exit_keeps_completed_execution_journal(workers):
     assert calls == ["effect"] and "".join(result.units) == source
     assert result.error is result.failed_unit is None and result.unexecuted == ()
     assert_reaped(workers)
+
+
+async def test_namespace_package_import_supports_real_host_handshake_in_fresh_process(workers):
+    script = r"""
+import asyncio
+from examples.worker import run_worker
+from examples.overlap import run_scenario
+
+original = asyncio.create_subprocess_exec
+async def tracked(*args, **kwargs):
+    process = await original(*args, **kwargs)
+    print(f"OWNED_WORKER:{process.pid}", flush=True)
+    return process
+asyncio.create_subprocess_exec = tracked
+
+async def main():
+    entered, received = asyncio.Event(), asyncio.Event()
+    first, later = "value = await tool('first')\n", "await tool(value)\n"
+    calls = []
+    async def tool(value):
+        calls.append(value)
+        if value == "first":
+            entered.set()
+            await received.wait()
+        return "parent result"
+    async def records():
+        yield {"type": "delta", "text": first}
+        await entered.wait()
+        yield {"type": "delta", "text": later}
+        yield {"type": "done", "status": "completed", "source": first + later}
+    result = await run_worker(records(), tool, on_received=lambda chars: received.set() if chars == len(first + later) else None)
+    assert result.state == "finished" and result.returncode == 0
+    assert calls == ["first", "parent result"] and received.is_set()
+    await run_scenario("completed")
+    print("PACKAGE_IMPORT_HANDSHAKE_OK", flush=True)
+asyncio.run(main())
+"""
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", script, cwd=EXAMPLES.parent, env=environment, start_new_session=True, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+    worker_pid = None
+    try:
+        first_line = await asyncio.wait_for(process.stdout.readline(), 3)
+        assert first_line.startswith(b"OWNED_WORKER:"), first_line.decode(errors="replace")
+        worker_pid = int(first_line.split(b":", 1)[1])
+        output, _ = await asyncio.wait_for(process.communicate(), 8)
+        assert process.returncode == 0, output.decode(errors="replace")
+        assert b"PACKAGE_IMPORT_HANDSHAKE_OK" in output
+        assert_reaped(workers)
+    finally:
+        # The smoke host owns its worker at runtime; retain its exact group ID
+        # here so a failed outer assertion cannot orphan the nested subprocess.
+        if worker_pid is not None:
+            try:
+                os.killpg(worker_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

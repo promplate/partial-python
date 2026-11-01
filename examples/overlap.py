@@ -76,7 +76,10 @@ async def execute_buffered(chunks: AsyncIterable[str], executor: Executor, *, ca
 
 async def run_scenario(status: str):
     # This sibling owns the example wire protocol; do not implement it twice.
-    from transport import MAX_RECORD_BYTES, SourceAborted, SourceProtocolError, record_bytes, source_deltas
+    if __package__:
+        from .transport import MAX_RECORD_BYTES, SourceAborted, SourceProtocolError, record_bytes, source_deltas
+    else:
+        from transport import MAX_RECORD_BYTES, SourceAborted, SourceProtocolError, record_bytes, source_deltas
 
     entered = asyncio.Event()
     later_buffered = asyncio.Event()
