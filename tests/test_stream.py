@@ -386,6 +386,44 @@ async def test_cancellation_during_source_cleanup_cannot_report_success():
         await stream.aclose()
 
 
+@pytest.mark.parametrize("swallow_cancellation", [False, True])
+async def test_cleanup_cancellation_retains_prior_execution_failure_in_exception_chain(swallow_cancellation):
+    primary = ValueError("original execution failure")
+    closing = asyncio.Event()
+
+    class Source:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return "raise primary\nnever = 1\n"
+
+        async def aclose(self):
+            closing.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if not swallow_cancellation:
+                    raise
+
+    executor = Executor({"primary": primary})
+    stream = executor.stream(Source())
+    task = asyncio.create_task(anext(stream))
+    try:
+        await asyncio.wait_for(closing.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError) as captured:
+            await task
+        assert executor.error is captured.value and executor.state == "failed"
+        assert captured.value.__context__ is primary and not captured.value.__suppress_context__
+        assert executor.failed_unit.source == "raise primary\n"
+        assert [unit.source for unit in executor.unexecuted] == ["never = 1\n"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await stream.aclose()
+
+
 async def test_cleanup_attribute_failure_is_recorded_as_terminal_error():
     cleanup = OSError("cannot access source closer")
 

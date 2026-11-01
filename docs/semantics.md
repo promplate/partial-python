@@ -69,6 +69,8 @@ These distinctions follow the documented [future/global rules](https://docs.pyth
 
 A completed event means that execution of its unit returned normally. Its timestamps and original source range identify that unit. If compilation, execution, or awaiting raises, the executor becomes terminal and re-raises the original exception. Earlier effects remain. The failing unit may already have performed effects before it raised; cancellation has the same limitation. No implicit retry is safe.
 
+An ordinary source-cleanup error does not replace an execution failure already in flight; it is attached as a best-effort exception note. A new cancellation or process-level exception during cleanup does propagate and becomes `executor.error`; Python’s native `__context__` chain retains the earlier failure. Hosts should retain or render the full exception chain, not only the terminal message.
+
 The executor rejects overlapping or recursive writes instead of silently reordering them. Backpressure preserves execution order but can delay reading additional model tokens while a tool call runs. An adapter that needs concurrent network ingestion can buffer text separately with an explicit limit; executing source still remains sequential.
 
 This is language-boundary safety, not a sandbox, rollback mechanism, or distributed exactly-once protocol. An external worker can enforce isolation and resource limits independently of these parsing rules.
