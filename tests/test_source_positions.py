@@ -18,7 +18,7 @@ def positioned_nodes(source, start_line=1):
 
 @pytest.mark.parametrize("leading", ROOT_PREFIXES)
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
-@pytest.mark.parametrize("tail,ending", [("next(", ")\n"), ('"""open\n', '"""\n'), ("1", "e3\n")])
+@pytest.mark.parametrize("tail,ending", [("next(", ")\n"), ('"""open\n', '"""\n'), ("1", "e3\n"), ("'hello", " world'\n")])
 def test_successor_keeps_its_logical_line_prefix_and_releases_prior_compound(leading, newline, tail, ending):
     prefix, leading, tail, ending = (value.replace("\n", newline) for value in (PREFIX, leading, tail, ending))
     source = prefix + leading + tail + ending
