@@ -11,11 +11,18 @@ from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
 from time import monotonic
 from types import CodeType
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-from .parser import CodeUnit, Parser, _tree
+from .parser import _FUTURES, CodeUnit, Parser, _source_line, _tree
 
-_FUTURE_FLAGS = sum(getattr(__future__, name).compiler_flag for name in __future__.all_feature_names)
+
+def _character_column(text: str, byte_column: int | None) -> int | None:
+    if byte_column is None or byte_column <= 0:
+        return byte_column
+    return len(text.encode()[:byte_column - 1].decode(errors="replace")) + 1
+
+
+ExecutionState = Literal["open", "finished", "failed", "aborted"]
 
 
 class UnsupportedSyntaxError(SyntaxError):
@@ -68,17 +75,29 @@ class Executor:
     """
 
     def __init__(self, namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>"):
-        self.namespace = namespace if namespace is not None else {}
+        self._namespace = namespace if namespace is not None else {}
         self._parser = Parser(filename=filename)
         self._events: list[Execution] = []
         self._flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
         self._prologue = True
         self._first = True
         self._busy = False
-        self._state = "open"
-        self.failed_unit: CodeUnit | None = None
-        self.error: BaseException | None = None
+        self._state: ExecutionState = "open"
+        self._failed_unit: CodeUnit | None = None
+        self._error: BaseException | None = None
         self._unexecuted: deque[CodeUnit] = deque()
+
+    @property
+    def namespace(self) -> dict[str, Any]:
+        return self._namespace
+
+    @property
+    def error(self) -> BaseException | None:
+        return self._error
+
+    @property
+    def failed_unit(self) -> CodeUnit | None:
+        return self._failed_unit
 
     @property
     def parser(self) -> ParserState:
@@ -94,7 +113,7 @@ class Executor:
         return tuple(self._events)
 
     @property
-    def state(self) -> str:
+    def state(self) -> ExecutionState:
         return self._state
 
     def _enter(self) -> None:
@@ -106,8 +125,7 @@ class Executor:
 
     def _syntax_error(self, error_type: type[SyntaxError], message: str, statement: CodeUnit, node: ast.stmt, *, shifted: bool = False) -> SyntaxError:
         line = node.lineno - (statement.start_line - 1 if shifted else 0)
-        lines = statement.source.splitlines(keepends=True)
-        text = lines[line - 1] if line <= len(lines) else ""
+        text = _source_line(statement.source, line)
         column = len(text.encode()[: node.col_offset].decode(errors="replace")) + 1
         return error_type(message, (self._parser.filename, statement.start_line + line - 1, column, text))
 
@@ -125,12 +143,29 @@ class Executor:
             # Each code object otherwise treats its first string as a new module docstring.
             tree.body.insert(0, ast.copy_location(ast.Pass(), tree.body[0]))
         ast.increment_lineno(tree, statement.start_line - 1)
-        code = compile(tree, self._parser.filename, "exec", flags=self._flags, dont_inherit=True)
+        try:
+            code = compile(tree, self._parser.filename, "exec", flags=self._flags, dont_inherit=True)
+        except SyntaxError as error:
+            if error.lineno is not None:
+                error.text = _source_line(statement.source, error.lineno - statement.start_line + 1)
+                # AST compiler ranges are UTF-8 byte columns. Once source text
+                # is attached, convert both endpoints for diagnostic renderers.
+                error.offset = _character_column(error.text, error.offset)
+                if error.end_lineno is not None:
+                    end_text = _source_line(statement.source, error.end_lineno - statement.start_line + 1)
+                    error.end_offset = _character_column(end_text, error.end_offset)
+                error.args = (error.msg, (self._parser.filename, error.lineno, error.offset, error.text, error.end_lineno, error.end_offset))
+            raise
         if sys.version_info >= (3, 14) and scope.annotations and not code.co_flags & __future__.annotations.compiler_flag:
             raise self._syntax_error(
                 UnsupportedSyntaxError, "incremental module annotations require `from __future__ import annotations` on Python 3.14+", statement, scope.annotations[0], shifted=True
             )
-        self._flags |= code.co_flags & _FUTURE_FLAGS
+        # Read feature requests from this unit, not code-object bits such as
+        # CO_NESTED that overlap legacy future flags. Never borrow future flags
+        # from later queued units accepted by the parser in the same feed.
+        for future_node in future:
+            for name in future_node.names:
+                self._flags |= _FUTURES.get(name.name, 0)
         for index, node in enumerate(tree.body):
             if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                 continue
@@ -150,6 +185,7 @@ class Executor:
             # A historical caught cancellation count alone does not poison a new operation.
             await asyncio.sleep(0)
             code = self._compile(statement)
+            # eval returns the top-level-await coroutine; exec would discard it.
             result = eval(code, self.namespace, self.namespace)
             if inspect.isawaitable(result):
                 await result
@@ -158,8 +194,8 @@ class Executor:
             if task is not None and task.cancelling() > cancellations:
                 raise asyncio.CancelledError
         except BaseException as error:
-            self.error = error
-            self.failed_unit = statement
+            self._error = error
+            self._failed_unit = statement
             self._state = "failed"
             raise
         event = Execution(len(self._events), statement, started, monotonic())
@@ -175,7 +211,7 @@ class Executor:
                 events.append(await self._run(self._unexecuted.popleft()))
             return tuple(events)
         except BaseException as error:
-            self.error = error
+            self._error = error
             self._state = "failed"
             raise
         finally:
@@ -191,7 +227,7 @@ class Executor:
             self._state = "finished"
             return tuple(events)
         except BaseException as error:
-            self.error = error
+            self._error = error
             self._state = "failed"
             raise
         finally:
@@ -239,7 +275,7 @@ class Executor:
             raise
         except BaseException as error:
             primary_error = error
-            self.error = error
+            self._error = error
             self._state = "failed"
             raise
         finally:
@@ -255,7 +291,7 @@ class Executor:
                     raise asyncio.CancelledError
             except BaseException as cleanup_error:
                 if primary_error is None or not isinstance(cleanup_error, Exception):
-                    self.error = cleanup_error
+                    self._error = cleanup_error
                     self._state = "failed"
                     raise
                 primary_error.add_note(f"Source iterator cleanup also failed: {cleanup_error!r}")

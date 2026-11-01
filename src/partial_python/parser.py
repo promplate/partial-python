@@ -25,18 +25,34 @@ class CodeUnit:
 _COMPOUND = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try, ast.TryStar, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Match)
 _CLAUSES = frozenset({"elif", "else", "except", "finally"})
 _LINE_END = re.compile(r"[\r\n]")
+_FUTURES = {name: getattr(__future__, name).compiler_flag for name in __future__.all_feature_names}
 _TRIVIA = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.ENCODING})
 
 
 def _tree(source: str, filename: str, flags: int = 0, start_line: int = 1) -> ast.Module:
     try:
         return cast(ast.Module, compile(source, filename, "exec", flags=flags | ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True))
-    except SyntaxError as error:
-        if error.lineno is not None:
-            error.lineno += start_line - 1
-        if error.end_lineno is not None:
-            error.end_lineno += start_line - 1
-        raise
+    except SyntaxError:
+        if start_line == 1:
+            raise
+        # Only the error path pays for leading lines. Let CPython construct both
+        # serialized locations and messages that themselves mention a line number.
+        return cast(ast.Module, compile("\n" * (start_line - 1) + source, filename, "exec", flags=flags | ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True))
+
+
+def _source_line(source: str, line: int) -> str:
+    # str.splitlines also splits formfeeds and Unicode separators, unlike Python.
+    start = 0
+    for _ in range(max(0, line - 1)):
+        match = _LINE_END.search(source, start)
+        if match is None:
+            return ""
+        start = match.end() + (match[0] == "\r" and source[match.end() : match.end() + 1] == "\n")
+    match = _LINE_END.search(source, start)
+    if match is None:
+        return source[start:]
+    end = match.end() + (match[0] == "\r" and source[match.end() : match.end() + 1] == "\n")
+    return source[start:end]
 
 
 def _line_end(source: str, start: int) -> int:
@@ -194,9 +210,7 @@ class Parser:
                 for node in tree.body:
                     if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                         for name in node.names:
-                            feature = getattr(__future__, name.name, None)
-                            if isinstance(feature, __future__._Feature):
-                                self._flags |= feature.compiler_flag
+                            self._flags |= _FUTURES.get(name.name, 0)
                 result.append(self._statement(source))
                 consumed = end
             if checkpoint is None or checkpoint <= scan:
