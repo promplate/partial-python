@@ -247,7 +247,8 @@ class Executor:
         """Execute a source iterator, retaining diagnostics on this executor.
 
         Normal exhaustion declares EOF. Adapters must raise for truncation or
-        failed transport. The acquired iterator is closed on every exit path.
+        failed transport. Every exit attempts to await the acquired iterator’s
+        ``aclose()`` when provided.
         This operation owns the executor until exhausted or explicitly closed.
         """
         self._enter()
