@@ -172,6 +172,7 @@ class Executor:
             if self._first and index == 0 and docstring:
                 continue
             self._prologue = False
+            break
         if tree.body:
             self._first = False
         return cast(CodeType, code)

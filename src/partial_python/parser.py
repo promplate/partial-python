@@ -223,7 +223,7 @@ class Parser:
         self._closed = False
         self._flags = 0
         self._scan = 0
-        self._examined = 0
+        self._retry_full_window = False
         self._line_started = False
         self._delimiters: tuple[str, ...] = ()
         self._logical_root = True
@@ -278,8 +278,8 @@ class Parser:
         result = []
         consumed = 0
         scan = self._scan
-        window_end = len(self._pending) if self._examined > scan else _line_end(self._pending, scan)
-        examined = scan
+        window_end = len(self._pending) if self._retry_full_window else _line_end(self._pending, scan)
+        self._retry_full_window = False
         while scan < len(self._pending):
             checkpoint = None
             for boundary in _candidates(self._pending[scan:window_end], self._delimiters, self._logical_root):
@@ -318,20 +318,18 @@ class Parser:
                 result.append(self._statement(source))
                 consumed = end
             if checkpoint is None or checkpoint <= scan:
-                examined = window_end
                 if window_end == len(self._pending):
+                    self._retry_full_window = True
                     break
                 # Exponential windows avoid revisiting every prior physical line
                 # of an unfinished list/string in one large transport chunk.
                 window_end = min(len(self._pending), scan + max(1, window_end - scan) * 2)
             else:
                 scan = checkpoint
-                examined = scan
                 window_end = _line_end(self._pending, scan)
         # Lexer checkpoints retain only reconstructible state. Original-source
         # compilation still validates the complete suite and every source unit.
         self._scan = max(scan - consumed, 0)
-        self._examined = max(examined - consumed, 0)
         self._checked = max(self._checked - consumed, 0)
         self._pending = self._pending[consumed:]
         return tuple(result)
