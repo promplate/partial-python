@@ -24,7 +24,7 @@ PROGRAMS = [
     "value = [\n    b'''fake ]\nelse:\n(\n''',\n    1,\n]\nnext()\n",
     "value = [\n    'one\\\ntwo',\n    1,\n]\nnext()\n",
     'value = [\n    f"{value:{width}.{precision}f}",\n    1,\n]\nnext()\n',
-    'value = [\n    f"{f\'{name}\'}",\n    1,\n]\nnext()\n',
+    "value = [\n    f\"{f'{name}'}\",\n    1,\n]\nnext()\n",
     'value = [\n    rf"{name!r} {{fake ]}}",\n    1,\n]\nnext()\n',
     'value = [\n    f"""{(\n        name\n    )}\nfake ]\n""",\n    1,\n]\nnext()\n',
     "变量 = [\n    '🙂',\n    {'é': [\n        1,\n    ]},\n]\n下一步()\n",
@@ -35,11 +35,11 @@ PROGRAMS = [
     "value = (\n    'first'\n    'second'\n)\nnext()\n",
     pytest.param('value = [\n    f"{mapping["key"]}",\n    1,\n]\nnext()\n', marks=PEP701, id="same-quote-fstring-expression"),
     pytest.param('value = [\n    f"""{name  # fake } ]\n    }""",\n    1,\n]\nnext()\n', marks=PEP701, id="comment-in-fstring-expression"),
-    pytest.param('value = [\n    f"{\'\\n\'.join(names)}",\n    1,\n]\nnext()\n', marks=PEP701, id="backslash-in-fstring-expression"),
+    pytest.param("value = [\n    f\"{'\\n'.join(names)}\",\n    1,\n]\nnext()\n", marks=PEP701, id="backslash-in-fstring-expression"),
     pytest.param("def first[T: (\n    int,\n    str,\n)](value: T):\n    return value\nnext()\n", marks=PEP701, id="type-parameter-container"),
     pytest.param('value = [\n    t"""{(\n        name\n    )}\nfake ]\n""",\n    1,\n]\nnext()\n', marks=TSTRINGS, id="multiline-template-expression"),
-    pytest.param('value = [\n    t"{f\'{name}\'}",\n    1,\n]\nnext()\n', marks=TSTRINGS, id="fstring-in-template"),
-    pytest.param('value = [\n    f"{t\'{name}\'}",\n    1,\n]\nnext()\n', marks=TSTRINGS, id="template-in-fstring"),
+    pytest.param("value = [\n    t\"{f'{name}'}\",\n    1,\n]\nnext()\n", marks=TSTRINGS, id="fstring-in-template"),
+    pytest.param("value = [\n    f\"{t'{name}'}\",\n    1,\n]\nnext()\n", marks=TSTRINGS, id="template-in-fstring"),
 ]
 
 
@@ -62,13 +62,13 @@ def assert_stream(source, chunks):
             assert unit.start == committed
             assert unit.end == unit.start + len(unit.source)
             assert unit.end <= received
-            assert unit.source == source[unit.start:unit.end]
+            assert unit.source == source[unit.start : unit.end]
             assert unit.start_line == line
             line += unit.source.count("\n") + unit.source.count("\r") - unit.source.count("\r\n")
             assert unit.end_line == line
             committed = unit.end
             actual.extend(nodes(unit.source))
-            assert actual == expected[:len(actual)]
+            assert actual == expected[: len(actual)]
             units.append(unit)
 
     for chunk in chunks:
@@ -177,6 +177,7 @@ def test_long_data_containers_have_linear_normalization_and_tokenizer_work(monke
                 text = readline()
                 work["tokenized"] += len(text)
                 return text
+
             return original_tokens(read)
 
         with monkeypatch.context() as patch:
@@ -185,7 +186,7 @@ def test_long_data_containers_have_linear_normalization_and_tokenizer_work(monke
             parser = Parser()
             units = []
             for offset in range(0, len(source), chunk_size):
-                units.extend(parser.feed(source[offset:offset + chunk_size]))
+                units.extend(parser.feed(source[offset : offset + chunk_size]))
             units.extend(parser.finish())
         assert [unit.source for unit in units] == [source]
         return len(source), work
