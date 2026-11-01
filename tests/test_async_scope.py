@@ -1,7 +1,9 @@
 """CodeAct-style async scope regressions; fixed language fixtures, not model evaluations."""
 
+import asyncio
 import sys
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 import pytest
 
@@ -19,6 +21,27 @@ async def double(value):
 
 async def allowed(value):
     return value % 2 == 0
+
+
+async def test_stream_units_share_the_callers_task_and_context():
+    marker = ContextVar("stream_context", default="host")
+    owner, observed = asyncio.current_task(), []
+
+    async def inspect_context():
+        await asyncio.sleep(0)
+        observed.append((asyncio.current_task(), marker.get()))
+
+    async def chunks():
+        yield "token = marker.set('stream')\n"
+        assert marker.get() == "stream" and asyncio.current_task() is owner
+        yield "await inspect_context()\n"
+        yield "marker.reset(token)\n"
+
+    executor = Executor({"marker": marker, "inspect_context": inspect_context})
+    async for _ in executor.stream(chunks()):
+        assert asyncio.current_task() is owner
+    assert observed == [(owner, "stream")]
+    assert marker.get() == "host" and executor.state == "finished"
 
 
 async def execute(source, namespace, chunk_size):

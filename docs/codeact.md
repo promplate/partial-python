@@ -19,6 +19,8 @@ A model tool call is one logical execution stream. The parser emits stable origi
 
 The standalone executor does not own tasks created by user code. `asyncio.create_task()` must survive parser flushes so a later statement can await the resulting task. Closing or failing a stream does not imply canceling every task in the process: that would also kill unrelated application work. Applications needing scoped cleanup should supply their own task registry or task group around a logical model call. Hard timeouts for CPU-bound code require a process boundary; canceling an asyncio task only works when execution cooperates.
 
+Units execute in the calling task's context, with no hidden task per unit. A single consuming task therefore preserves `ContextVar` changes and tokens across units, which matters for output routing. A shared globals dictionary does not transfer task-local context between separate calls to `asyncio.create_task(anext(events))`. Consume the logical stream in one task and place `asyncio.timeout(...)` around that scope when its context must persist; a source iterator's own context-manager tokens may also require that lifetime.
+
 For notebook integration, retain a single logical cell's output/history lifecycle while executing its sealed statements. Calling `run_cell_async()` separately for each statement changes `_`, `Out[n]`, final-expression display, transform semantics, and task cleanup. A raw-Python execution backend is the initial default; IPython `%`, `!`, and `%%` forms need their own cell-level contract.
 
 ## Compile-unit differences
