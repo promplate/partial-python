@@ -3,19 +3,26 @@
 Run: uv run examples/tracebacks.py
 Use a fresh filename for each source stream. Keep its file alive while functions
 or tracebacks from that stream can still be used; finishing execution is not the
-end of the file's lifetime. This fixture does not register a global source cache.
+end of the file's lifetime. This UTF-8 recipe requires an absent or UTF-8 source
+encoding cookie: compile(str) ignores cookies, but traceback readers honor them.
+This fixture does not register a global source cache.
 """
 
 import asyncio
 import tempfile
 import traceback
+from contextlib import aclosing
 from pathlib import Path
 
 from partial_python import Executor
 
 
 async def record_and_execute(executor, source_file, chunks):
-    """The host owns the input iterator, source file, and namespace lifetime."""
+    """The host owns the file/namespace and must close its acquired input iterator.
+
+    This helper consumes the input but does not close it; use caller-owned
+    ``aclosing`` when the iterator provides ``aclose``.
+    """
     task = asyncio.current_task()
     cancellations = task.cancelling() if task is not None else 0
     try:
@@ -53,7 +60,8 @@ async def main():
         filename = Path(directory).resolve() / "response.py"
         executor = Executor({"__name__": "__main__", "pause": pause}, filename=str(filename))
         with filename.open("w", encoding="utf-8", newline="") as source_file:
-            await record_and_execute(executor, source_file, chunks())
+            async with aclosing(chunks()) as deltas:
+                await record_and_execute(executor, source_file, deltas)
         # The writer and executor have finished, but the host still owns the file.
         try:
             await executor.namespace["fail_later"]()
