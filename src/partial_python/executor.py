@@ -268,6 +268,10 @@ class Executor:
                 if task is not None and task.cancelling() > cancellations:
                     raise asyncio.CancelledError
                 self._unexecuted.extend(self._parser.feed(chunk))
+                if not self._unexecuted:
+                    # Buffered input can return immediately without suspending.
+                    # Keep empty/unfinished streams cancellable between chunks.
+                    await asyncio.sleep(0)
                 while self._unexecuted:
                     yield await self._run(self._unexecuted.popleft())
             self._unexecuted.extend(self._parser.finish())

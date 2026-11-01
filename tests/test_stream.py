@@ -327,6 +327,34 @@ async def test_stream_cancellation_records_failed_unit_and_preserves_queue():
         await stream.aclose()
 
 
+@pytest.mark.parametrize("first, later", [("", ""), ("for item in []:\n", "    pass\n")])
+async def test_buffered_unsealed_input_yields_to_cancellation_before_requesting_more(first, later):
+    pulled, closed = [], []
+
+    async def source():
+        try:
+            for index in range(8):
+                if index == 0:
+                    asyncio.get_running_loop().call_soon(asyncio.current_task().cancel)
+                pulled.append(index)
+                yield first if index == 0 else later
+        finally:
+            closed.append(True)
+
+    executor = Executor()
+
+    async def consume():
+        return [event async for event in executor.stream(source())]
+
+    task = asyncio.create_task(consume())
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await task
+    assert pulled == [0] and closed == [True]
+    assert executor.state == "failed" and executor.error is captured.value
+    assert executor.failed_unit is None and executor.events == executor.unexecuted == ()
+    assert executor.parser.pending == first and not executor.parser.closed
+
+
 async def test_cancellation_during_source_cleanup_cannot_report_success():
     closing = asyncio.Event()
 
