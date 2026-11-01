@@ -16,13 +16,13 @@ uv run python tools/check_corpus.py --limit 0 --chunk-max 512 --char-limit 2048
 uv build
 ```
 
-The full 1,437-case suite passed with 1,328 passed/109 skipped on 3.11, 1,353/84 on 3.12 and 3.13, 1,423/14 on 3.14, and all 1,437 passed on 3.15; syntax introduced later than the host version is skipped explicitly. The generated-grammar stress run was requested with 10,000 examples on each of 3.11, 3.14 and 3.15, seed 827176, with no failures. It combines nested control flow, optional clauses, strings, decorators, joining, indentation, line endings and transport partitions. Every generated program must compile successfully before testing; invalid generated input is a test failure, never silently discarded.
+The full 1,465-case suite passed with 1,356 passed/109 skipped on 3.11, 1,381/84 on 3.12 and 3.13, 1,451/14 on 3.14, and all 1,465 passed on 3.15; syntax introduced later than the host version is skipped explicitly. The generated-grammar stress run was requested with 10,000 examples on each of 3.11, 3.14 and 3.15, seed 827176, with no failures. It combines nested control flow, optional clauses, strings, decorators, joining, indentation, line endings and transport partitions. Every generated program must compile successfully before testing; invalid generated input is a test failure, never silently discarded.
 
 ## Real-source conformance
 
 Local runs on 2 November 2026 used bulk delivery, seeded random partitions and character delivery for files up to the configured threshold. Every intermediate emitted AST, including start/end line and byte-column positions, must be a prefix of the whole-source AST; original slices, source cursors, retained tails and final unit grouping are also checked.
 
-| Corpus | Valid files passed | Source characters | Partitions |
+| Corpus | AST-parseable files passed | Source characters | Partitions |
 | --- | ---: | ---: | ---: |
 | Python 3.11.18 standard library | 732 | 12,190,338 | 1,641 |
 | Python 3.14.10 standard library | 653 | 11,799,837 | 1,453 |
@@ -32,7 +32,9 @@ Local runs on 2 November 2026 used bulk delivery, seeded random partitions and c
 | Local gh-mcp sources | 4 | 17,704 | 10 |
 | Local HMR sources | 21 | 83,086 | 57 |
 
-There were no parser errors or invariant mismatches among valid files. The 3.15 tree additionally contained three deliberately invalid encoding fixtures and two whole-source syntax-error fixtures; they were reported separately, not counted as parser successes. Versioned standard-library rows overlap in module identity; they are not distinct projects. Third-party/local runs used maximum random chunks of 37 characters and a 4,096-character threshold for character delivery. Installed source versions can change, so the corpus runner prints interpreter/root configuration and hashes any failing source for reproduction.
+Here “valid” means accepted by native AST-only compilation; it does not assert whole-module scope validity or successful execution. There were no parser errors or invariant mismatches among these files. Corpus text is decoded with `tokenize.open`, which normalizes physical newlines; separate partition fixtures preserve original CRLF/CR text exactly.
+
+The 3.15 tree additionally contained three deliberately invalid encoding fixtures and two whole-source syntax-error fixtures; they were reported separately, not counted as parser successes. Versioned standard-library rows overlap in module identity; they are not distinct projects. Third-party/local runs used maximum random chunks of 37 characters and a 4,096-character threshold for character delivery. Installed source versions can change, so the corpus runner prints interpreter/root configuration and hashes any failing source for reproduction.
 
 The oracle deliberately uses public CPython compilation independently of the library's private parser helpers. It shifts each emitted tree by the unit's original starting line and compares `ast.dump(..., include_attributes=True)` against whole-source nodes; columns are never adjusted. Sharing those helpers would hide bugs in the implementation being checked.
 

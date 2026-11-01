@@ -1,6 +1,6 @@
 # Design decisions
 
-Status: working prototype under adversarial review. The API is unpublished and may change.
+Status: validated working prototype. The API is experimental, unpublished and may change.
 
 ## Contract before implementation
 
@@ -51,9 +51,8 @@ Failure and cancellation are terminal. The journal separates completed units, th
 
 Future flags persist across units with stream-prologue checks. Only the initial string can become a module docstring. Module `global` declarations are rejected. On Python 3.14+, module annotated assignments require source-explicit future annotations so separate lazy annotation functions cannot overwrite one another. Function/class scopes remain intact. Policy traversal skips expressions and uses an explicit stack, avoiding artificial recursion limits on native-compilable expressions.
 
-## Validation still in progress
+## Validation and remaining scope
 
-- Repeated external `/simplify` and `/code-review` rounds; one configured route returned an authentication error and does not count as completed review.
-- Full version matrix after each material scanner/executor change, package artifact smoke tests, and broad real-source partition conformance.
-- Resource bounds and remaining large multiline input behavior.
-- Real model evaluation or CodeAct product integration would require complete real session context. Current fixtures, TCP protocol checks, and stdlib corpora are engineering verification only.
+The [validation record](validation.md) covers the Python 3.11–3.15 matrix, generated grammar checks, exact AST-position conformance on real source, isolated package installs, and end-to-end host examples. The [review record](reviews.md) distinguishes completed external `/simplify` and `/code-review` rounds from failed attempts and records accepted and rejected findings.
+
+The core deliberately leaves source-size limits, hard execution deadlines and process isolation to its host. Large multiline inputs and frequent unescaped quote candidates remain performance limits, not reasons to weaken the commit boundary. Real model evaluation or CodeAct product integration requires complete real session context; current fixtures, TCP protocol checks and source corpora are engineering verification only.
