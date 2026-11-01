@@ -25,7 +25,7 @@ A preview without a synthetic suffix can still be provisional. For example, `awa
 
 ## Options
 
-The default `Allow.NONE` returns only the committed prefix and retains the rest as `withheld`. Any nonzero policy enables provisional display and retains the whole input when the host AST parser accepts it. Additional flags allow specific repairs:
+The default `Allow.NONE` returns only the committed prefix and retains the rest as `withheld`. Any nonzero policy enables provisional display and retains a valid pending tail under the parser's current grammar. Additional flags allow specific repairs:
 
 | Flag | Display behavior |
 | --- | --- |
@@ -44,7 +44,9 @@ assert complete("value = 'hello'", Allow.STRING).source == "value = 'hello'"
 
 Both previews remain provisional until a real streaming boundary arrives. A synthetic `pass` is likewise replaced by the author's real suite without treating that display update as an execution commitment.
 
-Every returned `source` passes the host AST compiler with top-level await enabled. This is a syntax property; it does not imply successful runtime execution, a stable final value, sandboxing or reversible effects.
+Preview follows `Parser`'s ordered AST grammar, with top-level await enabled. Each committed unit was checked under the future flags active at that point; only the pending tail and proposed suffix are checked under the flags established by those units. A later future import never reinterprets earlier accepted source. The combined display is therefore not promised to parse as one module in a single compiler call; Python 3.11's `barry_as_FLUFL` handling is one such difference. Preview adds no executor prologue or scope checks.
+
+Syntax diagnostics retain their original snapshot line numbers. Encoding diagnostics retain the full original input and character offsets. These checks do not imply successful runtime execution, a stable final value, sandboxing or reversible effects.
 
 ## Conservative boundaries
 
