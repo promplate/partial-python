@@ -16,7 +16,7 @@ uv run python tools/check_corpus.py --limit 0 --chunk-max 512 --char-limit 2048
 uv build
 ```
 
-The full test suite has passed on Python 3.11–3.15; syntax introduced later than the host version is skipped explicitly. The generated-grammar stress run was requested with 10,000 examples on each of 3.11, 3.14 and 3.15, seed 827173, with no failures. It combines nested control flow, optional clauses, strings, decorators, joining, indentation, line endings and transport partitions. Every generated program must compile successfully before testing; invalid generated input is a test failure, never silently discarded.
+The full 831-case suite passed with 781 passed/50 skipped on 3.11, 794/37 on 3.12 and 3.13, 817/14 on 3.14, and all 831 passed on 3.15; syntax introduced later than the host version is skipped explicitly. The generated-grammar stress run was requested with 10,000 examples on each of 3.11, 3.14 and 3.15, seed 827173, with no failures. It combines nested control flow, optional clauses, strings, decorators, joining, indentation, line endings and transport partitions. Every generated program must compile successfully before testing; invalid generated input is a test failure, never silently discarded.
 
 ## Real-source conformance
 
@@ -51,5 +51,6 @@ Work-count regression tests accompany timing observations. No general linear-tim
 - `streaming_tools.py`: early call, complete compound holdback, sequential awaits and explicit EOF.
 - `transport.py`: real loopback TCP, fragmented UTF-8/JSON records, exact final-source consistency, truncation and disconnect behavior.
 - `overlap.py`: handshake-proven reception during an active await, bounded queue backpressure, cancellation propagation and source cleanup.
+- `worker.py`: actual child processes, independent source/RPC channels, persistent per-stream namespace, bounded output capture, hostile CPU fixtures, repeated cancellation, acquisition failures and exact process/group cleanup. Escaped descendants are cleaned separately by the test fixture; the example itself contains only its owned group.
 
-These fixtures use real parser/executor/protocol code and controlled local tool functions. They do not measure an LLM or claim production CodeAct integration. Packaging smoke checks have also imported the built wheel in an isolated Python 3.11 environment; repeat them after release-affecting edits.
+These fixtures use real parser/executor/protocol code and controlled local tool functions. They do not measure an LLM or claim production CodeAct integration. Packaging smoke checks have also imported the built wheel with isolated Python 3.11 and 3.15 environments; repeat them after release-affecting edits.

@@ -16,6 +16,8 @@ Review is ongoing. The requested external route is a persistent `m clmimo` sessi
 | Retry state stored an unnecessary coordinate. | Replace it with a boolean indicating whether the next probe should span the unfinished window. |
 | Bounded reception could strand a task after independent child cancellation. | Keep execution in the owning task and explicitly forward independent producer cancellation. |
 | Empty deltas accumulated history without consuming the character limit. | Discard empty transport deltas before retaining source history. |
+| Descendants could hold output pipes open beyond the worker timeout. | Parent-owned output transports, bounded draining and explicit closure; process waiting is independent of pipe EOF on 3.11 too. |
+| Partial resource acquisition and malformed worker summaries were unchecked. | Close already acquired resources, validate terminal fields and preserve the unexecuted journal across the process boundary. |
 
 ## Suggestions deliberately not applied
 

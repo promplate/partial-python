@@ -110,7 +110,7 @@ Execution uses sequential interactive compilation units sharing one namespace, w
 
 On Python 3.14+, module-scope annotated assignments require an explicit `from __future__ import annotations`, because independent native annotation code objects would overwrite prior deferred annotations. Function/class annotations stay inside their complete scopes. [Precise contract and counterexamples](docs/semantics.md).
 
-This is in-process Python, not a sandbox or transaction. Awaited operations cooperate with cancellation; CPU-bound code blocks the event loop, and code that suppresses/undoes cancellation cannot be forcibly stopped here. Background tasks survive unit boundaries and belong to the host's logical execution scope. Permission checks, hard timeouts, and process isolation belong in that host.
+This is in-process Python, not a sandbox or transaction. Awaited operations cooperate with cancellation; CPU-bound code blocks the event loop, and code that suppresses/undoes cancellation cannot be forcibly stopped here. Background tasks survive unit boundaries and belong to the host's logical execution scope. Permission checks, hard timeouts, and process isolation belong in that host. [The POSIX worker example](examples/worker.py) demonstrates cross-process tool results and bounded cleanup. It terminates its own process group; it is not a sandbox and does not contain descendants that deliberately escape that group.
 
 ## Development
 
@@ -122,6 +122,7 @@ uv run ruff check .
 uv run python examples/streaming_tools.py
 uv run python examples/transport.py
 uv run python examples/overlap.py
+uv run python examples/worker.py  # POSIX host prototype
 uv build
 ```
 
