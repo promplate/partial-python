@@ -37,8 +37,9 @@ def test_successor_keeps_its_logical_line_prefix_and_releases_prior_compound(lea
 
 
 @pytest.mark.parametrize("leading", ["    \\\n", "\\\n    ", "\f    "])
-def test_indentation_on_first_physical_line_keeps_a_joined_successor_inside_the_suite(leading):
-    source = PREFIX + leading + "next()\n"
+@pytest.mark.parametrize("body", ["next()\n", "1e3\n", '"""body\n"""\n', 'f"""body\n"""\n'])
+def test_indentation_on_first_physical_line_keeps_a_joined_successor_inside_the_suite(leading, body):
+    source = PREFIX + leading + body
     parser = Parser()
     for character in source:
         assert parser.feed(character) == ()

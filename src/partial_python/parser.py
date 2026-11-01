@@ -188,6 +188,10 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                 string_quotes.pop()
             elif kind == tokenize.ERRORTOKEN:
                 lexical_error = True
+                # An incomplete short quote can expose leading whitespace as
+                # ERRORTOKEN on 3.11. It cannot prove a successor's indentation.
+                if token.string in {" ", "\t", "\f"}:
+                    continue
             elif kind == tokenize.OP:
                 if token.string in "([{":
                     stack.append(token.string)
