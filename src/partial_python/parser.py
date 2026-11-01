@@ -6,11 +6,13 @@ import ast
 import io
 import re
 import tokenize
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Literal, cast
 
 
 @dataclass(frozen=True, slots=True)
-class Statement:
+class CodeUnit:
     """An exact source slice; offsets count Unicode characters, lines are one-based."""
 
     source: str
@@ -28,7 +30,7 @@ _TRIVIA = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.ENCODING})
 
 def _tree(source: str, filename: str, flags: int = 0, start_line: int = 1) -> ast.Module:
     try:
-        return compile(source, filename, "exec", flags=flags | ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
+        return cast(ast.Module, compile(source, filename, "exec", flags=flags | ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True))
     except SyntaxError as error:
         if error.lineno is not None:
             error.lineno += start_line - 1
@@ -45,7 +47,7 @@ def _line_end(source: str, start: int) -> int:
     return min(match.end() + (match[0] == "\r"), len(source))
 
 
-def _normalize(source: str):
+def _normalize(source: str) -> tuple[str, list[int]]:
     normalized = []
     offsets = [0]
     index = 0
@@ -63,12 +65,12 @@ def _normalize(source: str):
     return "".join(normalized), offsets
 
 
-def _candidates(source: str):
+def _candidates(source: str) -> Iterator[tuple[int, Literal["successor", "newline", "resume", "started"]]]:
     source, original_offsets = _normalize(source)
     starts = [0]
     starts.extend(index + 1 for index, character in enumerate(source) if character == "\n")
 
-    def offset(position):
+    def offset(position: tuple[int, int]) -> int:
         row, column = position
         return starts[row - 1] + column if row <= len(starts) else len(source)
 
@@ -84,23 +86,27 @@ def _candidates(source: str):
             elif kind == tokenize.NEWLINE:
                 # tokenize invents NEWLINE and DEDENT at EOF. Neither closes a live stream.
                 if token.string and indent == 0:
-                    yield original_offsets[offset(token.end)], False
+                    yield original_offsets[offset(token.end)], "newline"
                 if token.string:
-                    yield original_offsets[offset(token.end)], None
+                    yield original_offsets[offset(token.end)], "resume"
                     return
                 logical_start = True
             elif kind == tokenize.NL and logical_start and token.string:
                 # A blank/comment-only physical line has no lexical state to carry.
-                yield original_offsets[offset(token.end)], None
+                yield original_offsets[offset(token.end)], "resume"
                 return
             elif kind not in _TRIVIA and kind != tokenize.ENDMARKER:
                 if logical_start and indent == 0:
                     # A partial NAME such as `e` may still become `else`; wait for a delimiter.
                     stable = offset(token.end) < len(source) or kind == tokenize.OP or (kind == tokenize.NAME and not any(clause.startswith(token.string) for clause in _CLAUSES))
                     if stable and token.string not in _CLAUSES:
-                        yield original_offsets[offset(token.start)], True
+                        yield original_offsets[offset(token.start)], "successor"
+                    if stable:
+                        yield original_offsets[offset(token.start)], "started"
+                elif logical_start:
+                    yield original_offsets[offset(token.start)], "started"
                 logical_start = False
-    except (tokenize.TokenError, IndentationError, SyntaxError):
+    except (tokenize.TokenError, IndentationError, SyntaxError, UnicodeError):
         # Valid earlier tokens remain useful even when the unfinished suffix is not tokenizable.
         return
 
@@ -120,6 +126,8 @@ class Parser:
         self._closed = False
         self._flags = 0
         self._scan = 0
+        self._examined = 0
+        self._line_started = False
         self._checked = 0
         self._checked_successor = False
 
@@ -135,32 +143,43 @@ class Parser:
     def committed(self) -> int:
         return self._offset
 
-    def _ensure_open(self):
+    def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("parser is closed")
 
-    def _statement(self, source: str) -> Statement:
-        statement = Statement(source, self._offset, self._offset + len(source), self._line, self._line + source.count("\n") + source.count("\r") - source.count("\r\n"))
+    def _statement(self, source: str) -> CodeUnit:
+        statement = CodeUnit(source, self._offset, self._offset + len(source), self._line, self._line + source.count("\n") + source.count("\r") - source.count("\r\n"))
         self._offset = statement.end
         self._line = statement.end_line
         return statement
 
-    def feed(self, delta: str) -> tuple[Statement, ...]:
+    def feed(self, delta: str) -> tuple[CodeUnit, ...]:
         self._ensure_open()
         if not isinstance(delta, str):
             raise TypeError("delta must be str")
+        resolves_cr = self._pending.endswith("\r")
         self._pending += delta
+        # Once the first token is unambiguous, only a physical line ending can
+        # produce NEWLINE. Skip growing operands/literals until that can happen.
+        if self._line_started and not resolves_cr and "\n" not in delta and "\r" not in delta:
+            return ()
         result = []
         consumed = 0
         scan = self._scan
-        window_end = _line_end(self._pending, scan)
+        window_end = len(self._pending) if self._examined > scan else _line_end(self._pending, scan)
+        examined = scan
         while scan < len(self._pending):
             checkpoint = None
-            for relative_end, successor in _candidates(self._pending[scan:window_end]):
+            for relative_end, kind in _candidates(self._pending[scan:window_end]):
                 end = scan + relative_end
-                if successor is None:
+                if kind == "started":
+                    self._line_started = True
+                    continue
+                if kind == "resume":
+                    self._line_started = False
                     checkpoint = end
                     break
+                successor = kind == "successor"
                 if end <= consumed or end < self._checked or (end == self._checked and successor == self._checked_successor):
                     continue
                 self._checked = end
@@ -168,7 +187,7 @@ class Parser:
                 source = self._pending[consumed:end]
                 try:
                     tree = _tree(source, self.filename, self._flags)
-                except (SyntaxError, ValueError):
+                except (SyntaxError, ValueError, UnicodeError):
                     continue
                 if not tree.body or (not successor and isinstance(tree.body[-1], _COMPOUND)):
                     continue
@@ -181,21 +200,26 @@ class Parser:
                 result.append(self._statement(source))
                 consumed = end
             if checkpoint is None or checkpoint <= scan:
+                examined = window_end
                 if window_end == len(self._pending):
                     break
-                window_end = _line_end(self._pending, window_end)
+                # Exponential windows avoid revisiting every prior physical line
+                # of an unfinished list/string in one large transport chunk.
+                window_end = min(len(self._pending), scan + max(1, window_end - scan) * 2)
             else:
                 scan = checkpoint
+                examined = scan
                 window_end = _line_end(self._pending, scan)
         # Restart tokenization only after a real logical line; never inside a
         # bracket, multiline string, or explicit continuation. Prior suite
         # indentation is validated when compiling the original whole statement.
         self._scan = max(scan - consumed, 0)
+        self._examined = max(examined - consumed, 0)
         self._checked = max(self._checked - consumed, 0)
         self._pending = self._pending[consumed:]
         return tuple(result)
 
-    def finish(self) -> tuple[Statement, ...]:
+    def finish(self) -> tuple[CodeUnit, ...]:
         self._ensure_open()
         self._closed = True
         # Parse even a trivia-only tail: an unterminated comment string is harmless,

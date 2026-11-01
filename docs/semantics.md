@@ -29,7 +29,7 @@ A real logical newline seals a top-level simple statement. All semicolon-separat
 
 The standard tokenizer creates virtual `NEWLINE` and `DEDENT` tokens at EOF. A parser repeatedly run against a growing buffer therefore reports apparent closures that are not stream boundaries. Likewise, `codeop.compile_command(..., symbol="exec")` accepts a loop whose body can still grow. Neither result alone proves append stability. Python's [lexical rules](https://docs.python.org/3.14/reference/lexical_analysis.html#indentation) and [compound grammar](https://docs.python.org/3.14/reference/compound_stmts.html) explain these distinctions.
 
-All three Python newline conventions are accepted. CRLF remains one physical newline even when transport chunks split between CR and LF. Statement offsets refer to original Unicode characters, not UTF-8 bytes or normalized source. The host interpreter defines the grammar; a Python 3.11 host does not gain Python 3.14 syntax merely because the package also supports that host version.
+All three Python newline conventions are accepted. CRLF remains one physical newline even when transport chunks split between CR and LF. CodeUnit offsets refer to original Unicode characters, not UTF-8 bytes or normalized source. The host interpreter defines the grammar; a Python 3.11 host does not gain Python 3.14 syntax merely because the package also supports that host version.
 
 ## Execution is a sequence of compilation units
 

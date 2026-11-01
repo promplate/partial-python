@@ -9,7 +9,6 @@ import pytest
 
 from partial_python import Parser
 
-
 ONE_LINE_ENDINGS = [
     "if condition: first()\n",
     "if condition: first()\nelse: second()\n",
@@ -124,6 +123,32 @@ def test_unfinished_backslash_string_becomes_valid_without_losing_earlier_source
     parser = Parser()
     assert [statement.source for statement in parser.feed("first()\nvalue = 'one\\\n")] == ["first()\n"]
     assert [statement.source for statement in parser.feed("two'\n")] == ["value = 'one\\\ntwo'\n"]
+
+
+@pytest.mark.parametrize("tail", ["\ud800", "value = '\udfff'\n", "# invalid source character \ud800\n"])
+@pytest.mark.parametrize("separate_chunk", [False, True])
+def test_unencodable_tail_does_not_lose_already_committed_prefix(tail, separate_chunk):
+    parser = Parser()
+    prefix = "first()\n"
+    if separate_chunk:
+        statements = parser.feed(prefix)
+        assert parser.feed(tail) == ()
+    else:
+        statements = parser.feed(prefix + tail)
+    assert [statement.source for statement in statements] == [prefix]
+    assert parser.committed == len(prefix)
+    assert parser.pending == tail
+    with pytest.raises(UnicodeError):
+        parser.finish()
+    assert parser.closed
+    assert parser.pending == tail
+
+
+def test_ascii_escape_for_surrogate_is_valid_source():
+    source = "value = '\\ud800'\n"
+    parser = Parser()
+    assert [statement.source for statement in parser.feed(source)] == [source]
+    assert parser.finish() == ()
 
 
 @pytest.mark.parametrize("module", ["contextlib", "functools", "dataclasses", "argparse", "inspect"])
