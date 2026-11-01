@@ -67,9 +67,11 @@ These distinctions follow the documented [future/global rules](https://docs.pyth
 
 ## Failures, cancellation, and effects
 
-A completed event means that execution of its unit returned normally. Its timestamps and original source range identify that unit. If compilation, execution, or awaiting raises, the executor becomes terminal and re-raises the original exception. Earlier effects remain. The failing unit may already have performed effects before it raised; cancellation has the same limitation. No implicit retry is safe.
+A completed event means that execution of its unit returned normally. Its timestamps and original source range identify that unit. If compilation, execution, or awaiting raises, the executor becomes terminal. Ordinary Python exception and coroutine rules apply. Earlier effects remain. The failing unit may already have performed effects before it raised; cancellation has the same limitation. No implicit retry is safe.
 
 An ordinary source-cleanup error does not replace an execution failure already in flight; it is attached as a best-effort exception note. A new cancellation or process-level exception during cleanup does propagate and becomes `executor.error`; Python’s native `__context__` chain retains the earlier failure. Hosts should retain or render the full exception chain, not only the terminal message.
+
+Iterator control exceptions keep Python’s native behavior. `StopIteration` escaping a coroutine becomes `RuntimeError`; `StopAsyncIteration` raised by executed code becomes `RuntimeError` at the event-stream boundary rather than successful source exhaustion. Its original instance remains in `executor.error` and the propagated exception’s `__cause__`. Conversely, Python’s [`agen.aclose()` protocol](https://docs.python.org/3.14/reference/expressions.html#agen.aclose) consumes a propagated `GeneratorExit`, even one originating in a source closer; the executor still records that cleanup failure. A `GeneratorExit` from source acquisition, reading, or executed code is a failure, distinct from a consumer closing at an event yield.
 
 The executor rejects overlapping or recursive writes instead of silently reordering them. Backpressure preserves execution order but can delay reading additional model tokens while a tool call runs. An adapter that needs concurrent network ingestion can buffer text separately with an explicit limit; executing source still remains sequential.
 

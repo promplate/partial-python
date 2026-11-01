@@ -74,3 +74,54 @@ async def test_source_yielding_during_close_is_failed_cleanup_not_more_input():
             with pytest.raises(StopAsyncIteration):
                 await anext(source_iterator)
     assert closed == [True]
+
+
+@pytest.mark.parametrize("mode", ["feed", "stream"])
+@pytest.mark.parametrize("exception", [StopIteration, StopAsyncIteration])
+async def test_unit_iteration_signals_cannot_be_mistaken_for_source_exhaustion(mode, exception):
+    primary = exception("unit failed")
+    executor = Executor({"primary": primary})
+    code = "raise primary\nnever = 1\n"
+
+    async def source():
+        yield code
+
+    expected = StopAsyncIteration if mode == "feed" and exception is StopAsyncIteration else RuntimeError
+    with pytest.raises(expected) as captured:
+        if mode == "feed":
+            await executor.feed(code)
+        else:
+            await anext(executor.stream(source()))
+    assert executor.state == "failed" and executor.events == ()
+    assert executor.failed_unit.source == "raise primary\n"
+    assert [unit.source for unit in executor.unexecuted] == ["never = 1\n"]
+    assert "never" not in executor.namespace
+    if exception is StopAsyncIteration:
+        assert executor.error is primary
+        assert (captured.value is primary) if mode == "feed" else (captured.value.__cause__ is primary)
+    else:
+        assert executor.error is captured.value and captured.value.__cause__ is primary
+
+
+async def test_native_aclose_may_consume_generator_exit_but_diagnostics_record_failure():
+    primary = GeneratorExit("source cleanup failed")
+
+    class Source:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return "first = 1\nnever = 2\n"
+
+        async def aclose(self):
+            raise primary
+
+    executor = Executor()
+    stream = executor.stream(Source())
+    await anext(stream)
+    # Python's async-generator close protocol consumes GeneratorExit, including
+    # one raised by a source closer. The recorded terminal state still matters.
+    assert await stream.aclose() is None
+    assert executor.state == "failed" and executor.error is primary
+    assert executor.failed_unit is None and len(executor.events) == 1
+    assert [unit.source for unit in executor.unexecuted] == ["never = 2\n"]

@@ -31,7 +31,7 @@ The current diagnostic model is useful when its distinctions are explicit:
 | `unexecuted` | Accepted, sealed units that have not started. They are retained for diagnostics, not automatic retry. |
 | `parser.pending` | Source still awaiting a grammatical boundary. |
 | `parser.committed` | Number of source characters accepted by the parser; this is not an execution watermark. |
-| `error` | The original terminal exception; rejected later calls must not replace it. |
+| `error` | The recorded terminal failure; rejected later calls must not replace it. Native generator control exceptions may be wrapped when propagated; see [exception semantics](semantics.md#failures-cancellation-and-effects). |
 | `state` | Open, successfully finished, failed, or explicitly aborted. |
 
 Successful events plus the failed range, queued ranges and pending tail preserve the accepted source after a mid-chunk failure. Syntax errors retain the original filename and line numbers. Cooperative cancellation is terminal, including when a producer or statement catches `CancelledError` without clearing the new cancellation request. This is not a hard deadline for code that loops forever or deliberately removes cancellation state.
@@ -46,7 +46,7 @@ Source ranges use half-open character offsets and one-based cursor lines. A fina
 
 The stream reserves the executor from its first consumption through exhaustion or explicit close, including source waits and suspended event yields. Interleaved `feed`, `finish`, `abort`, or another stream are rejected. Merely constructing an unstarted stream does not acquire the source or reserve the executor. It can continue a prefix already accepted through `feed`.
 
-The method maintains the same queue/error journal as direct calls and attempts to close its acquired source iterator on exit. Normal validated source exhaustion permits `finish`; early consumer close abandons pending source and retains the unexecuted queue. Runtime failure, invalid EOF, or source failure retain their original exception and source diagnostics. Cleanup failure must not disguise the original execution exception; cancellation during cleanup must not leave a successful terminal state.
+The method maintains the same queue/error journal as direct calls and attempts to close its acquired source iterator on exit. Normal validated source exhaustion permits `finish`; early consumer close abandons pending source and retains the unexecuted queue. Runtime failure, invalid EOF, or source failure retain their original exception and source diagnostics. Ordinary cleanup errors must not replace an existing execution failure. New cancellation or process-level interrupts during cleanup propagate with the original failure in Python’s exception chain and leave a failed terminal state.
 
 An async generator that yields while processing `aclose()` violates Python's close protocol and raises `RuntimeError`. With no earlier failure, the executor records that error and enters `failed`; after an execution failure, an ordinary cleanup exception is attached to the original error as a best-effort note. Broken exception formatting cannot replace that primary failure; a new cancellation or process-level interrupt still propagates. The library does not suppress the violation or promise that a broken iterator has finished releasing its resources.
 
