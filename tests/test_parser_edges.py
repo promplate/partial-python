@@ -92,7 +92,10 @@ def test_possible_continuation_keyword_waits_for_disambiguation(successor):
     assert parser.pending == source + successor
 
 
-@pytest.mark.parametrize("literal, suffix", [("1", "e3\n"), ("0", "x10\n"), (".5", "e+2\n"), ("1", "j\n"), ("''", "'body\n'''\n"), ("r''", "'body\n'''\n"), ("b''", "'body\n'''\n"), ("'x'", " 'y'\n")])
+@pytest.mark.parametrize(
+    "literal, suffix",
+    [("1", "e3\n"), ("0", "x10\n"), (".5", "e+2\n"), ("1", "j\n"), ("''", "'body\n'''\n"), ("r''", "'body\n'''\n"), ("b''", "'body\n'''\n"), ("'x'", " 'y'\n"), ("'e", "lse'\n"), ("'!", "'\n")],
+)
 @pytest.mark.parametrize("separate_chunk", [False, True])
 def test_literal_successor_seals_compound_even_when_literal_can_change(literal, suffix, separate_chunk):
     source = "if condition: first()\n"
