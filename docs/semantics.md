@@ -59,6 +59,8 @@ Other deliberate rules address common accidental differences:
 - Module-scope `global` declarations are rejected. In ordinary files their validity depends on earlier uses throughout the module; the interactive prompt relaxes this rule. Declarations inside a complete function or class remain ordinary Python.
 - A parseable AST still needs compilation before execution. AST-only parsing does not perform all scope checks: for example, standalone `return 42` parses but cannot execute.
 
+Compiler warnings can be emitted by speculative AST probes as well as final compilation. AST-stage warnings may repeat and use unit-relative line numbers, so line-specific warning filters are not equivalent to whole-file compilation. Broad warning-as-error policy remains effective. The library does not change process-global warning filters; suppressing or replaying them would introduce concurrency and exception-semantics differences.
+
 These distinctions follow the documented [future/global rules](https://docs.python.org/3.14/reference/simple_stmts.html#future), [interactive compiler state](https://docs.python.org/3.14/library/codeop.html), and [AST compilation caveat](https://docs.python.org/3.14/library/ast.html#ast.parse).
 
 ## Failures, cancellation, and effects
