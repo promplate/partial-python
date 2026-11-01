@@ -27,7 +27,7 @@ await executor.finish()  # Actual EOF permits baz.
 
 `feed()` and `finish()` return a `tuple[Execution, ...]` containing the units completed by that call. `executor.state` is `"open"`, `"finished"`, `"failed"`, or `"aborted"`.
 
-`finish()` means the source successfully completed. A network disconnect, cancelled request, or model token limit is not successful EOF: call `abort()` instead. It retains pending source for diagnosis and never executes it.
+`finish()` means the source successfully completed. A network disconnect, cancelled request, or model token limit is not successful EOF. For an idle executor, `abort()` retains pending source for diagnosis without executing it. It cannot interrupt an active operation: cancel and await that operation’s owning task first. If an event stream is paused at a yielded event, close it with `aclose()` or `aclosing` in its owning task/context. Never turn these failures into `finish()`.
 
 For async iterators, normal exhaustion means successful EOF; adapters **must raise** for truncation or transport failure. [The loopback transport example](examples/transport.py) demonstrates explicit `done(status, source)` validation. [Bounded concurrent reception](examples/overlap.py) shows how a host can keep receiving while a tool awaits. Final-source equality is a consistency check; it cannot undo effects already performed.
 
@@ -51,7 +51,7 @@ except Exception:
     raise
 ```
 
-A stream owns its executor until exhausted or closed. It attempts to close its acquired source iterator on every exit path. Use `aclosing` when a consumer might break early. `feed`, `finish`, and another stream cannot run concurrently; reentrant calls fail immediately. Construction of an iterator alone does not start execution. Keep iteration and closing in one task/context when source or executed code uses `ContextVar` tokens; `asyncio.timeout()` can bound that whole scope. [Task ownership](docs/codeact.md#task-ownership).
+A stream owns its executor until exhausted or closed. It attempts to close its acquired source iterator on every exit path. Use `aclosing` when a consumer might break early. `feed`, `finish`, `abort`, and another stream cannot intervene while a stream owns the executor; reentrant calls fail immediately. Construction of an iterator alone does not start execution. Keep iteration and closing in one task/context when source or executed code uses `ContextVar` tokens; `asyncio.timeout()` can bound that whole scope. [Task ownership](docs/codeact.md#task-ownership).
 
 Exceptions and cancellation are terminal. Previous side effects remain, and no unit is replayed. `events` contains earlier successes even when one `feed()` call later raises. `failed_unit` is absent for input/transport errors that occur outside a unit. `parser` is an immutable diagnostic snapshot, not an input interface.
 
