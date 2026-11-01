@@ -252,7 +252,7 @@ class Executor:
         """
         self._enter()
         iterator = None
-        primary_error = None
+        yielding = False
         try:
             iterator = aiter(chunks)
             while True:
@@ -273,17 +273,23 @@ class Executor:
                     # Keep empty/unfinished streams cancellable between chunks.
                     await asyncio.sleep(0)
                 while self._unexecuted:
-                    yield await self._run(self._unexecuted.popleft())
+                    event = await self._run(self._unexecuted.popleft())
+                    yielding = True
+                    yield event
+                    yielding = False
             self._unexecuted.extend(self._parser.finish())
             while self._unexecuted:
-                yield await self._run(self._unexecuted.popleft())
+                event = await self._run(self._unexecuted.popleft())
+                yielding = True
+                yield event
+                yielding = False
             self._state = "finished"
-        except GeneratorExit:
-            raise
         except BaseException as error:
-            primary_error = error
-            self._error = error
-            self._state = "failed"
+            # Only GeneratorExit injected at our event yield is consumer closure.
+            # The same exception from a source or executed unit is a real failure.
+            if not (yielding and isinstance(error, GeneratorExit)):
+                self._error = error
+                self._state = "failed"
             raise
         finally:
             if self._state == "open":
@@ -297,12 +303,12 @@ class Executor:
                 if cleanup_task is not None and cleanup_task.cancelling() > cancellations:
                     raise asyncio.CancelledError
             except BaseException as cleanup_error:
-                if primary_error is None or not isinstance(cleanup_error, Exception):
+                if self._error is None or not isinstance(cleanup_error, Exception):
                     self._error = cleanup_error
                     self._state = "failed"
                     raise
                 try:
-                    BaseException.add_note(primary_error, f"Source iterator cleanup also failed: {cleanup_error!r}")
+                    BaseException.add_note(self._error, f"Source iterator cleanup also failed: {cleanup_error!r}")
                 except Exception:  # noqa: BLE001, S110 - secondary diagnostics must not replace the primary error.
                     # A broken exception repr or notes attribute must not replace
                     # the execution failure merely while attaching diagnostics.

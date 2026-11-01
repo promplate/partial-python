@@ -481,3 +481,101 @@ async def test_cleanup_swallowing_new_cancellation_cannot_report_success():
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await stream.aclose()
+
+
+@pytest.mark.parametrize("origin", ["aiter", "anext", "body", "finish"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_internal_generator_exit_is_failure_not_consumer_close(origin, cleanup_fails):
+    primary = GeneratorExit("internal failure")
+    closed = []
+
+    class Source:
+        supplied = False
+
+        def __aiter__(self):
+            if origin == "aiter":
+                raise primary
+            return self
+
+        async def __anext__(self):
+            if origin == "anext":
+                raise primary
+            if self.supplied:
+                raise StopAsyncIteration
+            self.supplied = True
+            return "raise primary" if origin == "finish" else "raise primary\nnever = 1\n"
+
+        async def aclose(self):
+            closed.append(True)
+            if cleanup_fails:
+                raise OSError("source cleanup failed")
+
+    executor = Executor({"primary": primary})
+    with pytest.raises(GeneratorExit) as captured:
+        await anext(executor.stream(Source()))
+    assert captured.value is executor.error is primary and executor.state == "failed"
+    assert closed == ([] if origin == "aiter" else [True])
+    assert executor.events == ()
+    if origin in {"body", "finish"}:
+        assert executor.failed_unit.source == ("raise primary" if origin == "finish" else "raise primary\n")
+    else:
+        assert executor.failed_unit is None
+    assert [unit.source for unit in executor.unexecuted] == (["never = 1\n"] if origin == "body" else [])
+    if cleanup_fails and origin != "aiter":
+        assert any("source cleanup failed" in note for note in primary.__notes__)
+    with pytest.raises(RuntimeError, match="executor is failed"):
+        await executor.finish()
+
+
+@pytest.mark.parametrize("exception", [GeneratorExit, ValueError])
+async def test_consumer_injected_exception_is_distinct_from_source_failure(exception):
+    primary = exception("consumer stopped")
+    closed = []
+
+    async def source():
+        try:
+            yield "first = 1\nnever = 2\n"
+        finally:
+            closed.append(True)
+
+    executor = Executor()
+    stream = executor.stream(source())
+    try:
+        await anext(stream)
+        with pytest.raises(exception) as captured:
+            await stream.athrow(primary)
+        assert captured.value is primary and closed == [True]
+        assert executor.state == ("aborted" if exception is GeneratorExit else "failed")
+        assert executor.error is (None if exception is GeneratorExit else primary)
+        assert executor.failed_unit is None and len(executor.events) == 1
+        assert [unit.source for unit in executor.unexecuted] == ["never = 2\n"]
+        assert "never" not in executor.namespace
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("origin", ["source", "body", "finish"])
+async def test_generator_exit_after_completed_event_is_still_a_failure(origin):
+    primary = GeneratorExit("internal failure after progress")
+    closed = []
+
+    async def source():
+        try:
+            yield "first = 1\n"
+            if origin == "source":
+                raise primary
+            yield "raise primary" + ("\n" if origin == "body" else "")
+        finally:
+            closed.append(True)
+
+    executor = Executor({"primary": primary})
+    stream = executor.stream(source())
+    try:
+        assert (await anext(stream)).index == 0
+        with pytest.raises(GeneratorExit) as captured:
+            await anext(stream)
+        assert captured.value is executor.error is primary and executor.state == "failed"
+        assert len(executor.events) == 1 and closed == [True]
+        assert (executor.failed_unit is None) == (origin == "source")
+    finally:
+        await stream.aclose()
