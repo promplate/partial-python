@@ -51,14 +51,20 @@ The method maintains the same queue/error journal as direct calls and attempts t
 An async generator that yields while processing `aclose()` violates Python's close protocol and raises `RuntimeError`. With no earlier failure, the executor records that error and enters `failed`; after an execution failure, an ordinary cleanup exception is attached to the original error. The library does not suppress the violation or promise that a broken iterator has finished releasing its resources.
 
 ```python
+from contextlib import aclosing
+from partial_python import Executor
+
 executor = Executor(namespace)
 try:
-    async for event in executor.stream(validated_deltas):
-        display_completed(event)
+    async with aclosing(executor.stream(validated_deltas)) as events:
+        async for event in events:
+            display_completed(event)
 except Exception:
     inspect_failure(executor.error, executor.failed_unit, executor.unexecuted, executor.parser.pending)
     raise
 ```
+
+Exceptions from `display_completed()` belong to the caller; `executor.error` records source, execution and cleanup failures inside the executor. `aclosing` also closes the stream when the consumer raises or stops early.
 
 Completed events plus raised exceptions are enough for the first API. Host UIs can report a logical stream as running while awaiting a completion; a future started-event API should follow a real integration need, with a clear distinction between compilation, dispatch and completion. Do not emit a failed event and then also raise the same failure without a reason.
 

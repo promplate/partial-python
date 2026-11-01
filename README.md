@@ -2,6 +2,8 @@
 
 Execute append-only Python while the source is still arriving. Python 3.11+, no runtime dependencies. Experimental API; not yet published.
 
+`Executor` and `incremental_exec` require a running `asyncio` event loop. With AnyIO, use its asyncio backend. `Parser` and `complete` are synchronous and need no event loop.
+
 ```python
 from partial_python import incremental_exec
 
