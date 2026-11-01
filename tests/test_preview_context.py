@@ -65,7 +65,8 @@ def test_bracket_repair_uses_future_flags_and_global_diagnostic_lines(newline):
 def test_call_closure_guard_uses_tail_columns_with_original_line_numbers(prefix):
     tail = "send('你好'"
     result = complete(prefix + tail, Allow.ALL)
-    assert result.source == prefix and result.withheld == tail
+    committed = prefix.rstrip("\f")
+    assert result.source == committed and result.withheld == prefix[len(committed) :] + tail
     assert not result.suffix
 
 

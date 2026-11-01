@@ -155,6 +155,18 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
         row -= row_shift
         return starts[row - 1] + column if row <= len(starts) else len(source)
 
+    def root_prefix(position: tuple[int, int]) -> bool:
+        if position[0] - row_shift == 1:
+            return True
+        # Python 3.11's pure-Python tokenizer can miss indentation after an
+        # explicit join. Ask the host grammar whether this prefix is truly root.
+        # The sentinel is only a lexical-context probe, never executable source.
+        try:
+            tree = _tree(source[: offset(position)] + "pass\n", "<partial-python-boundary>")
+        except (SyntaxError, ValueError, UnicodeError):
+            return False
+        return len(tree.body) == 1 and isinstance(tree.body[0], ast.Pass)
+
     # This synthetic prefix restores lexical bracket context only. It never
     # enters a CodeUnit or the compiler. Checkpoints carry exact opener kinds
     # and the ORIGINAL logical line's indentation, not the prefix's column zero.
@@ -214,8 +226,11 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                         or kind in _STRING_STARTS
                         or (kind == tokenize.NAME and not any(clause.startswith(token.string) for clause in _CLAUSES))
                     )
-                    if stable and token.string not in _CLAUSES:
-                        yield _Boundary(original_offsets[offset(token.start)], "successor")
+                    if stable and token.string not in _CLAUSES and root_prefix(token.start):
+                        # This window starts at the logical line's beginning.
+                        # Keep formfeeds and explicit joins with the successor
+                        # so its source columns and physical lines stay intact.
+                        yield _Boundary(0, "successor")
                     if stable:
                         yield _Boundary(original_offsets[offset(token.start)], "started")
                 elif logical_start:
@@ -227,12 +242,11 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
         elif opening := _unfinished_quote(prefix + source, last_end):
             quote, position = opening
             if logical_start:
-                start = original_offsets[offset(position)]
                 # A host-proven string opener already excludes continuation
                 # clauses; its unfinished contents need not delay a predecessor.
-                if logical_root:
-                    yield _Boundary(start, "successor")
-                yield _Boundary(start, "started")
+                if logical_root and root_prefix(position):
+                    yield _Boundary(0, "successor")
+                yield _Boundary(0, "started")
             yield _Boundary(0, "string", quote=quote)
         # Valid earlier tokens remain useful even when the unfinished suffix is not tokenizable.
         return
