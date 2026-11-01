@@ -6,6 +6,7 @@ import runpy
 import signal
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -551,3 +552,54 @@ asyncio.run(main())
                 os.killpg(worker_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize("close_error_type", [OSError, asyncio.CancelledError])
+async def test_worker_terminal_write_failure_survives_ordinary_close_error(monkeypatch, failed, close_error_type):
+    worker_main = example["worker_main"]
+    primary, closing = ValueError("terminal write failed"), close_error_type("control close failed")
+
+    class Writer:
+        def __init__(self):
+            self.transport = self
+            self.closed = self.aborted = False
+
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            if failed:
+                raise primary
+
+        def abort(self):
+            self.aborted = True
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            raise closing
+
+    source_writer, control_writer = Writer(), Writer()
+    source_reader = asyncio.StreamReader()
+    source_reader.feed_data(example["record_bytes"]({"type": "done", "status": "completed", "source": ""}))
+    source_reader.feed_eof()
+    connections = iter(((source_reader, source_writer), (asyncio.StreamReader(), control_writer)))
+
+    async def connect(**kwargs):
+        return next(connections)
+
+    # Exercise the real worker execution/terminal path with controlled transports;
+    # only socket acquisition is replaced, so no fake descriptor is opened or closed.
+    monkeypatch.setitem(worker_main.__globals__, "socket", SimpleNamespace(socket=lambda **kwargs: object()))
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    expected = primary if failed and close_error_type is OSError else closing
+    with pytest.raises(type(expected)) as caught:
+        await worker_main(100, 200)
+    assert caught.value is expected
+    assert source_writer.aborted and control_writer.closed
+    if expected is primary:
+        assert any("control close failed" in note for note in primary.__notes__)
+    elif failed:
+        assert closing.__context__ is primary

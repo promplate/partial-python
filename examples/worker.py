@@ -25,10 +25,10 @@ from partial_python import Executor
 
 if __package__:
     from .overlap import execute_buffered
-    from .transport import MAX_RECORD_BYTES, record_bytes, source_deltas
+    from .transport import MAX_RECORD_BYTES, closing_writer, record_bytes, source_deltas
 else:
     from overlap import execute_buffered
-    from transport import MAX_RECORD_BYTES, record_bytes, source_deltas
+    from transport import MAX_RECORD_BYTES, closing_writer, record_bytes, source_deltas
 
 MAX_RECORDS = 128
 MAX_OUTPUT_BYTES = 1 << 16
@@ -371,24 +371,23 @@ async def worker_main(source_fd, control_fd):
         await execute_buffered(source_deltas(source_reader), executor, capacity=2, on_buffered=source_received)
     except BaseException as error:  # noqa: BLE001 - even cancellation must report a terminal worker state.
         error_text = describe_error(error)
-    try:
-        write_record(
-            control_writer,
-            {
-                "type": "finished",
-                "state": executor.state,
-                "units": [event.unit.source for event in executor.events],
-                "unexecuted": [unit.source for unit in executor.unexecuted],
-                "pending": executor.parser.pending,
-                "failed_unit": executor.failed_unit.source if executor.failed_unit else None,
-                "error": error_text,
-            },
-        )
-        await control_writer.drain()
-    finally:
-        source_writer.transport.abort()
-        control_writer.close()
-        await control_writer.wait_closed()
+    async with closing_writer(control_writer):
+        try:
+            write_record(
+                control_writer,
+                {
+                    "type": "finished",
+                    "state": executor.state,
+                    "units": [event.unit.source for event in executor.events],
+                    "unexecuted": [unit.source for unit in executor.unexecuted],
+                    "pending": executor.parser.pending,
+                    "failed_unit": executor.failed_unit.source if executor.failed_unit else None,
+                    "error": error_text,
+                },
+            )
+            await control_writer.drain()
+        finally:
+            source_writer.transport.abort()
 
 
 async def main():
