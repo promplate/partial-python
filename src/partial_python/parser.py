@@ -210,8 +210,14 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                     return
             elif kind not in _TRIVIA and kind != tokenize.ENDMARKER:
                 if logical_start and logical_root:
+                    # A literal may grow, but cannot become a continuation clause.
+                    # ERRORTOKEN is deliberately excluded: a trailing backslash
+                    # can disappear into explicit line joining before a real else.
                     stable = (
-                        offset(token.end) < len(source) or kind == tokenize.OP or kind in _STRING_STARTS or (kind == tokenize.NAME and not any(clause.startswith(token.string) for clause in _CLAUSES))
+                        offset(token.end) < len(source)
+                        or kind in {tokenize.OP, tokenize.NUMBER, tokenize.STRING}
+                        or kind in _STRING_STARTS
+                        or (kind == tokenize.NAME and not any(clause.startswith(token.string) for clause in _CLAUSES))
                     )
                     if stable and token.string not in _CLAUSES:
                         yield _Boundary(original_offsets[offset(token.start)], "successor")

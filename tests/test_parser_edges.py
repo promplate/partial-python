@@ -92,6 +92,41 @@ def test_possible_continuation_keyword_waits_for_disambiguation(successor):
     assert parser.pending == source + successor
 
 
+@pytest.mark.parametrize("literal, suffix", [("1", "e3\n"), ("0", "x10\n"), (".5", "e+2\n"), ("1", "j\n"), ("''", "'body\n'''\n"), ("r''", "'body\n'''\n"), ("b''", "'body\n'''\n"), ("'x'", " 'y'\n")])
+@pytest.mark.parametrize("separate_chunk", [False, True])
+def test_literal_successor_seals_compound_even_when_literal_can_change(literal, suffix, separate_chunk):
+    source = "if condition: first()\n"
+    parser = Parser()
+    if separate_chunk:
+        assert parser.feed(source) == ()
+        units = parser.feed(literal)
+    else:
+        units = parser.feed(source + literal)
+    assert [unit.source for unit in units] == [source]
+    assert parser.pending == literal
+    units += parser.feed(suffix) + parser.finish()
+    assert "".join(unit.source for unit in units) == source + literal + suffix
+    assert [ast.dump(node) for unit in units for node in ast.parse(unit.source).body] == [ast.dump(node) for node in ast.parse(source + literal + suffix).body]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("separate_chunk", [False, True])
+def test_backslash_successor_can_disappear_before_a_continuation_clause(newline, separate_chunk):
+    source = ("if condition:\n    first()\n").replace("\n", newline)
+    parser = Parser()
+    if separate_chunk:
+        assert parser.feed(source) == ()
+        assert parser.feed("\\") == ()
+    else:
+        assert parser.feed(source + "\\") == ()
+    suffix = newline + ("else:\n    second()\n").replace("\n", newline)
+    for character in suffix:
+        assert parser.feed(character) == ()
+    units = parser.finish()
+    assert [unit.source for unit in units] == [source + "\\" + suffix]
+    assert len(ast.parse(units[0].source).body[0].orelse) == 1
+
+
 @pytest.mark.parametrize(
     "tail",
     [
