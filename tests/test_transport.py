@@ -169,3 +169,112 @@ async def test_closing_network_consumer_closes_socket_without_executing_queue():
 async def test_empty_deltas_do_not_accumulate_unbounded_source_history():
     reader = reader_for(*[{"type": "delta", "text": ""}] * 1000, {"type": "done", "status": "completed", "source": ""})
     assert [delta async for delta in source_deltas(reader)] == []
+
+
+class CloseFailureWriter:
+    def __init__(self, error):
+        self.error = error
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        raise self.error
+
+
+@pytest.mark.parametrize("failed", [False, True])
+async def test_socket_close_oserror_preserves_only_existing_tool_failure(monkeypatch, failed):
+    primary, closing = ValueError("tool failed"), OSError("socket close failed")
+    writer = CloseFailureWriter(closing)
+    source = "await tool()\n"
+    reader = reader_for({"type": "delta", "text": source}, {"type": "done", "status": "completed", "source": source})
+    calls = []
+
+    async def tool():
+        calls.append("tool")
+        if failed:
+            raise primary
+
+    async def connect(*args, **kwargs):
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    with pytest.raises(ValueError if failed else OSError) as caught:
+        async for _ in execute_connection("fixture", 0, {"tool": tool}):
+            pass
+    assert caught.value is (primary if failed else closing)
+    assert writer.closed and calls == ["tool"]
+    if failed:
+        assert any("socket close failed" in note for note in primary.__notes__)
+
+
+class CleanupInterrupt(BaseException):
+    pass
+
+
+@pytest.mark.parametrize("error_type", [asyncio.CancelledError, CleanupInterrupt])
+@pytest.mark.parametrize("failed", [False, True])
+async def test_socket_close_new_cancellation_or_interrupt_propagates(monkeypatch, error_type, failed):
+    primary, closing = ValueError("tool failed"), error_type("close interrupted")
+    writer = CloseFailureWriter(closing)
+    source = "raise failure\n" if failed else ""
+    reader = reader_for({"type": "delta", "text": source}, {"type": "done", "status": "completed", "source": source})
+
+    async def connect(*args, **kwargs):
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    with pytest.raises(error_type) as caught:
+        async for _ in execute_connection("fixture", 0, {"failure": primary}):
+            pass
+    assert caught.value is closing and writer.closed
+    if failed:
+        assert closing.__context__ is primary
+
+
+async def test_consumer_close_reports_socket_failure_without_executing_later_units(monkeypatch):
+    closing = OSError("socket close failed")
+    writer = CloseFailureWriter(closing)
+    reader = reader_for({"type": "delta", "text": "calls.append(1)\ncalls.append(2)\n"})
+    calls = []
+
+    async def connect(*args, **kwargs):
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    stream = execute_connection("fixture", 0, {"calls": calls})
+    await anext(stream)
+    with pytest.raises(OSError) as caught:
+        await stream.aclose()
+    assert caught.value is closing and writer.closed and calls == [1]
+
+
+@pytest.mark.parametrize("scenario", ["transport", "overlap"])
+async def test_server_close_failure_reaches_scenario_instead_of_timing_out(monkeypatch, scenario):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "examples"))
+    run_scenario = example["run_scenario"] if scenario == "transport" else runpy.run_path(str(Path(__file__).parents[1] / "examples" / "overlap.py"))["run_scenario"]
+    start_server = asyncio.start_server
+    closing = OSError("server socket close failed")
+
+    class ServerWriter:
+        def __init__(self, writer):
+            self.writer = writer
+
+        def __getattr__(self, name):
+            return getattr(self.writer, name)
+
+        async def wait_closed(self):
+            await self.writer.wait_closed()
+            raise closing
+
+    async def start(callback, *args, **kwargs):
+        async def connected(reader, writer):
+            await callback(reader, ServerWriter(writer))
+
+        return await start_server(connected, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "start_server", start)
+    with pytest.raises(OSError) as caught:
+        await asyncio.wait_for(run_scenario("completed"), 3)
+    assert caught.value is closing
