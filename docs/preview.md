@@ -1,9 +1,9 @@
 # Display completion
 
-`partial_python.preview.complete()` is a separate, display-only API. It never executes source and never configures `Parser` or `Executor`. The runtime executes original statements sealed by actual streaming boundaries.
+`partial_python.complete()` is a separate, display-only API. It never executes source and never configures `Parser` or `Executor`. The runtime executes original `CodeUnit` slices sealed by actual streaming boundaries.
 
 ```python
-from partial_python.preview import Allow, complete
+from partial_python import Allow, complete
 
 preview = complete('await foo(1)\nvalues = ["hel', Allow.STRING | Allow.BRACKET)
 assert preview.prefix == 'await foo(1)\nvalues = ["hel'
@@ -19,7 +19,7 @@ The immutable `Completion` preserves provenance:
 - `source` is `prefix + suffix`.
 - `committed` is the number of original characters that passed the streaming parser's boundary rules.
 - `provisional` says whether display includes characters beyond that boundary or synthetic text.
-- `diagnostic` is the host parser's `SyntaxError` for the original input, when present. During a stream this can mean incomplete, not necessarily irreparable.
+- `diagnostic` is the original `SyntaxError` or `UnicodeError` raised while parsing the input, or `None`. During a stream a syntax diagnostic can mean incomplete, not necessarily irreparable. A lone surrogate cannot be encoded as Python source; its original Unicode error is retained while the malformed tail stays in `withheld`.
 
 A preview without a synthetic suffix can still be provisional. For example, `await foo(1)` is valid source but can still grow into `await foo(1) + other()`. It remains uncommitted until its real logical newline or declared EOF.
 
@@ -56,7 +56,7 @@ F-strings and template strings have nested grammars and are never repaired. A co
 
 `SUITE` is deliberately a preview permission. `for item in items:` can display with a synthetic `pass`, but the real loop remains entirely pending in the execution parser. No API automatically converts a `Completion` object into an execution unit.
 
-`complete()` is a stateless snapshot operation. For streaming execution use the persistent parser/executor. Calling the snapshot completer on every growing prefix necessarily rereads prior source; benchmark that separately from the incremental runtime.
+`complete()` is a stateless snapshot operation. For streaming execution use `Executor.feed()` or `Executor.stream()`, and inspect completed events through `Execution.unit`. Calling the snapshot completer on every growing prefix necessarily rereads prior source; benchmark that separately from the incremental runtime. Display completions do not belong in `executor.unexecuted` or its completed-event journal.
 
 ## Reference implementations
 

@@ -32,7 +32,7 @@ class Completion:
     suffix: str
     withheld: str
     committed: int
-    diagnostic: SyntaxError | None = None
+    diagnostic: SyntaxError | UnicodeError | None = None
 
     @property
     def source(self) -> str:
@@ -141,7 +141,7 @@ def complete(source: str, allow: Allow = Allow.NONE) -> Completion:
     diagnostic = None
     try:
         _parse(source)
-    except SyntaxError as error:
+    except (SyntaxError, UnicodeError) as error:
         diagnostic = error
     else:
         if allow:
@@ -150,7 +150,7 @@ def complete(source: str, allow: Allow = Allow.NONE) -> Completion:
     if suffix:
         try:
             tree = _parse(source + suffix)
-        except (SyntaxError, ValueError):
+        except (SyntaxError, ValueError, UnicodeError):
             pass
         else:
             # Closing a call would guess its final argument list, even when the
