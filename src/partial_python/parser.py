@@ -6,7 +6,7 @@ import ast
 import io
 import re
 import tokenize
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -63,7 +63,9 @@ def _line_end(source: str, start: int) -> int:
     return min(match.end() + (match[0] == "\r"), len(source))
 
 
-def _normalize(source: str) -> tuple[str, list[int]]:
+def _normalize(source: str) -> tuple[str, Sequence[int]]:
+    if "\r" not in source:
+        return source, range(len(source) + 1)
     normalized = []
     offsets = [0]
     index = 0
@@ -81,46 +83,84 @@ def _normalize(source: str) -> tuple[str, list[int]]:
     return "".join(normalized), offsets
 
 
-def _candidates(source: str) -> Iterator[tuple[int, Literal["successor", "newline", "resume", "started"]]]:
+_STRING_STARTS = frozenset(getattr(tokenize, name) for name in ("FSTRING_START", "TSTRING_START") if hasattr(tokenize, name))
+_STRING_ENDS = frozenset(getattr(tokenize, name) for name in ("FSTRING_END", "TSTRING_END") if hasattr(tokenize, name))
+
+
+@dataclass(frozen=True, slots=True)
+class _Boundary:
+    offset: int
+    kind: Literal["successor", "newline", "resume", "continuation", "started"]
+    delimiters: tuple[str, ...] = ()
+    logical_root: bool = True
+
+
+def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) -> Iterator[_Boundary]:
     source, original_offsets = _normalize(source)
     starts = [0]
     starts.extend(index + 1 for index, character in enumerate(source) if character == "\n")
+    prefix = "".join(delimiters) + "\n" if delimiters else ""
+    row_shift = bool(prefix)
 
     def offset(position: tuple[int, int]) -> int:
         row, column = position
+        row -= row_shift
         return starts[row - 1] + column if row <= len(starts) else len(source)
 
-    indent = 0
-    logical_start = True
+    # This synthetic prefix restores lexical bracket context only. It never
+    # enters a CodeUnit or the compiler. Checkpoints carry exact opener kinds
+    # and the ORIGINAL logical line's indentation, not the prefix's column zero.
+    stack = list(delimiters)
+    string_depth = 0
+    lexical_error = False
+    logical_start = not delimiters
     try:
-        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        for token in tokenize.generate_tokens(io.StringIO(prefix + source).readline):
+            if token.start[0] <= row_shift:
+                continue
             kind = token.type
+            if kind in _STRING_STARTS:
+                string_depth += 1
+            elif kind in _STRING_ENDS:
+                string_depth -= 1
+            elif kind == tokenize.ERRORTOKEN:
+                lexical_error = True
+            elif kind == tokenize.OP:
+                if token.string in "([{":
+                    stack.append(token.string)
+                elif token.string in ")]}" and (not stack or stack.pop() != {")": "(", "]": "[", "}": "{"}[token.string]):
+                    return
             if kind == tokenize.INDENT:
-                indent += 1
+                logical_root = False
             elif kind == tokenize.DEDENT:
-                indent -= 1
+                continue
             elif kind == tokenize.NEWLINE:
                 # tokenize invents NEWLINE and DEDENT at EOF. Neither closes a live stream.
-                if token.string and indent == 0:
-                    yield original_offsets[offset(token.end)], "newline"
+                if token.string and logical_root:
+                    yield _Boundary(original_offsets[offset(token.end)], "newline")
                 if token.string:
-                    yield original_offsets[offset(token.end)], "resume"
+                    yield _Boundary(original_offsets[offset(token.end)], "resume")
                     return
                 logical_start = True
-            elif kind == tokenize.NL and logical_start and token.string:
-                # A blank/comment-only physical line has no lexical state to carry.
-                yield original_offsets[offset(token.end)], "resume"
-                return
+            elif kind == tokenize.NL and token.string:
+                if logical_start and not stack:
+                    yield _Boundary(original_offsets[offset(token.end)], "resume")
+                    return
+                if stack and not string_depth and not lexical_error:
+                    # Never checkpoint f/t-string lexical state or a partial
+                    # token. Persist only this completed NL snapshot, not any
+                    # transient delimiter changes observed at temporary EOF.
+                    yield _Boundary(original_offsets[offset(token.end)], "continuation", tuple(stack), logical_root)
+                    return
             elif kind not in _TRIVIA and kind != tokenize.ENDMARKER:
-                if logical_start and indent == 0:
-                    # A partial NAME such as `e` may still become `else`; wait for a delimiter.
+                if logical_start and logical_root:
                     stable = offset(token.end) < len(source) or kind == tokenize.OP or (kind == tokenize.NAME and not any(clause.startswith(token.string) for clause in _CLAUSES))
                     if stable and token.string not in _CLAUSES:
-                        yield original_offsets[offset(token.start)], "successor"
+                        yield _Boundary(original_offsets[offset(token.start)], "successor")
                     if stable:
-                        yield original_offsets[offset(token.start)], "started"
+                        yield _Boundary(original_offsets[offset(token.start)], "started")
                 elif logical_start:
-                    yield original_offsets[offset(token.start)], "started"
+                    yield _Boundary(original_offsets[offset(token.start)], "started")
                 logical_start = False
     except (tokenize.TokenError, IndentationError, SyntaxError, UnicodeError):
         # Valid earlier tokens remain useful even when the unfinished suffix is not tokenizable.
@@ -144,6 +184,8 @@ class Parser:
         self._scan = 0
         self._examined = 0
         self._line_started = False
+        self._delimiters: tuple[str, ...] = ()
+        self._logical_root = True
         self._checked = 0
         self._checked_successor = False
 
@@ -186,13 +228,16 @@ class Parser:
         examined = scan
         while scan < len(self._pending):
             checkpoint = None
-            for relative_end, kind in _candidates(self._pending[scan:window_end]):
-                end = scan + relative_end
+            for boundary in _candidates(self._pending[scan:window_end], self._delimiters, self._logical_root):
+                end = scan + boundary.offset
+                kind = boundary.kind
                 if kind == "started":
                     self._line_started = True
                     continue
-                if kind == "resume":
-                    self._line_started = False
+                if kind in {"resume", "continuation"}:
+                    self._line_started = kind == "continuation"
+                    self._delimiters = boundary.delimiters
+                    self._logical_root = boundary.logical_root
                     checkpoint = end
                     break
                 successor = kind == "successor"
@@ -224,9 +269,8 @@ class Parser:
                 scan = checkpoint
                 examined = scan
                 window_end = _line_end(self._pending, scan)
-        # Restart tokenization only after a real logical line; never inside a
-        # bracket, multiline string, or explicit continuation. Prior suite
-        # indentation is validated when compiling the original whole statement.
+        # Lexer checkpoints retain only reconstructible state. Original-source
+        # compilation still validates the complete suite and every source unit.
         self._scan = max(scan - consumed, 0)
         self._examined = max(examined - consumed, 0)
         self._checked = max(self._checked - consumed, 0)
