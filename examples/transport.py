@@ -82,12 +82,16 @@ async def source_deltas(reader: asyncio.StreamReader) -> AsyncIterator[str]:
 
 @asynccontextmanager
 async def closing_writer(writer):
-    """Own socket cleanup and preserve failures from this scope, not its caller."""
+    """Own socket cleanup and preserve failures from this scope, not its caller.
+
+    A shutdown GeneratorExit does not hide a socket close failure.
+    """
     # sys.exception() can expose an unrelated exception handled by the caller.
     primary = None
     try:
         yield
     except BaseException as error:
+        # The except target is cleared before finally; retain a separate binding.
         primary = error
         raise
     finally:
