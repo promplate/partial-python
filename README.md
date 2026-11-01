@@ -57,7 +57,7 @@ Exceptions and cancellation are terminal. Previous side effects remain, and no u
 
 A unit can finish its body and produce all its effects after catching `CancelledError`. If it leaves the new cancellation request outstanding, the executor still raises cancellation, records `failed_unit`, and emits no success event. Missing events do not prove that effects are absent. A source that violates the close protocol by yielding during `aclose()` raises `RuntimeError`; closing failures are reported, not suppressed.
 
-Each `Execution` records a monotonic start/completion time and the original `CodeUnit`; it does not capture expression values or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`. Reuse the same namespace with a new executor for another logical model response. With no namespace argument, the executor starts with `__name__ = "__main__"`. A supplied dictionary is used as-is; include `"__name__": "__main__"` when it should behave as a script. No module is registered in `sys.modules`.
+Each `Execution` records a monotonic start/completion time and the original `CodeUnit`; it does not capture expression values or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`. Reuse the same namespace with a new executor for another logical model response. With no namespace argument, the executor starts with `__name__ = "__main__"`. A supplied dictionary is used as-is; include `"__name__": "__main__"` when it should behave as a script. No module is registered in `sys.modules`. [Retaining a source file](examples/tracebacks.py) gives ordinary tracebacks their original source lines, including later calls to functions defined by the stream.
 
 ## What can be committed?
 
