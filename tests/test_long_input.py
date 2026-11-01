@@ -116,3 +116,39 @@ def test_indented_long_line_does_not_flush_its_parent():
     assert parser.feed("'\n") == ()
     source = prefix + "a" * 1600 + "'\n"
     assert [statement.source for statement in parser.feed("next(")] == [source]
+
+
+@pytest.mark.parametrize("inspect_pending", [False, True])
+@pytest.mark.parametrize(
+    "opening,middle,closing",
+    [
+        ("value = '\u4f60", "\u597d" * 100, "'\n"),
+        ('consume("', "a" * 100, '")\r\n'),
+        ("value = [", "1," * 100, "]\rnext()\n"),
+        ("if condition:\n    value = '", "a" * 100, "'\nnext()\n"),
+    ],
+)
+def test_buffered_fragments_preserve_source_with_optional_diagnostic_reads(opening, middle, closing, inspect_pending):
+    parser = Parser()
+    units = list(parser.feed(opening))
+    accepted = opening
+    for character in middle:
+        units.extend(parser.feed(character))
+        accepted += character
+        if inspect_pending:
+            assert "".join(unit.source for unit in units) + parser.pending == accepted
+    units.extend(parser.feed(closing))
+    units.extend(parser.finish())
+    assert "".join(unit.source for unit in units) == opening + middle + closing
+    assert parser.pending == ""
+
+
+def test_finish_materializes_buffered_invalid_tail_without_losing_it():
+    parser = Parser()
+    assert parser.feed("value = '") == ()
+    for _ in range(100):
+        assert parser.feed("abc") == ()
+    with pytest.raises(SyntaxError):
+        parser.finish()
+    assert parser.closed
+    assert parser.pending == "value = '" + "abc" * 100

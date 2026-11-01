@@ -177,6 +177,7 @@ class Parser:
     def __init__(self, *, filename: str = "<partial-python>"):
         self.filename = filename
         self._pending = ""
+        self._chunks: list[str] = []
         self._offset = 0
         self._line = 1
         self._closed = False
@@ -191,6 +192,9 @@ class Parser:
 
     @property
     def pending(self) -> str:
+        if self._chunks:
+            self._pending += "".join(self._chunks)
+            self._chunks.clear()
         return self._pending
 
     @property
@@ -216,11 +220,15 @@ class Parser:
         if not isinstance(delta, str):
             raise TypeError("delta must be str")
         resolves_cr = self._pending.endswith("\r")
-        self._pending += delta
         # Once the first token is unambiguous, only a physical line ending can
         # produce NEWLINE. Skip growing operands/literals until that can happen.
         if self._line_started and not resolves_cr and "\n" not in delta and "\r" not in delta:
+            if delta:
+                # Join only when scanning or reading diagnostics; copying the
+                # growing operand on every small delta is otherwise quadratic.
+                self._chunks.append(delta)
             return ()
+        self._pending = self.pending + delta
         result = []
         consumed = 0
         scan = self._scan
@@ -282,7 +290,7 @@ class Parser:
         self._closed = True
         # Parse even a trivia-only tail: an unterminated comment string is harmless,
         # but a stray backslash or bracket must never disappear silently.
-        _tree(self._pending, self.filename, self._flags, self._line)
+        _tree(self.pending, self.filename, self._flags, self._line)
         if not self._pending:
             return ()
         statement = self._statement(self._pending)
