@@ -44,6 +44,8 @@ x: int
 
 On Python 3.14, compiling this as one module installs its deferred annotation function before evaluating `seen`; splitting it into units does not. Separately compiling `x: int` and `y: str` also replaces the first module annotation function, losing the earlier annotation. The executor rejects module-scope annotated assignments on Python 3.14+ unless string annotations were explicitly enabled with `from __future__ import annotations`. This includes annotations inside module-level control flow. Function and class annotations remain inside their complete containing definition and do not need this restriction. The restriction avoids silent data loss; it does not retroactively promise whole-module equivalence.
 
+The default guard also includes attribute, subscript and parenthesized targets. Although these do not create a new `__annotate__` function, CPython 3.14/3.15 still [resets the module's conditional-annotation set](https://github.com/python/cpython/blob/v3.14.10/Python/codegen.c#L871-L878), which an existing annotation function [reads when returning entries](https://github.com/python/cpython/blob/v3.14.10/Python/codegen.c#L775-L787). For example, native `exec("x: int", namespace)` followed by native `exec("(y): str", namespace)` leaves the old function present but changes its result from `{"x": int}` to `{}`. Explicit future annotations select string-annotation semantics for this stream; they do not promise to preserve arbitrary preexisting deferred-annotation machinery in a supplied namespace.
+
 ```python
 a = (1000, 2000)
 b = (1000, 2000)

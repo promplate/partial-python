@@ -2,6 +2,7 @@
 
 import pickle
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -112,6 +113,25 @@ async def test_annotation_policy_applies_through_module_control_flow(source):
     with pytest.raises(UnsupportedSyntaxError, match="annotations"):
         await executor.feed(source)
         await executor.finish()
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="Deferred module metadata is specific to Python 3.14+")
+@pytest.mark.parametrize("source", ["(value): int\n", "box.value: int = 9\n", "values[0]: int = 9\n", "if True:\n    box.value: int = 9\n"])
+async def test_nonsimple_annotations_are_guarded_before_mutating_native_module_metadata(source):
+    namespace = execute_native("prior: int = 7\n", {"box": SimpleNamespace(), "values": [0]})
+    annotate = namespace["__annotate__"]
+    assert annotate(1) == {"prior": int}
+    executor = Executor(namespace)
+    with pytest.raises(UnsupportedSyntaxError, match="annotations"):
+        await executor.feed(source)
+        await executor.finish()
+    assert annotate(1) == {"prior": int}
+    assert namespace["values"] == [0] and not hasattr(namespace["box"], "value")
+    # Native non-simple annotations have no new __annotate__, but reset the
+    # conditional-entry set read by the existing function. A simple-target-only
+    # guard would silently lose these annotations in a caller-owned namespace.
+    execute_native(source, namespace)
+    assert namespace["__annotate__"] is annotate and annotate(1) == {}
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])

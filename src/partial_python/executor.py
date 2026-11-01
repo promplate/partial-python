@@ -59,6 +59,8 @@ class _ModuleScope:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.expr)):
                 continue
             if isinstance(node, ast.AnnAssign):
+                # Even non-simple targets can reset deferred module metadata on
+                # 3.14+, despite not creating a new __annotate__ function themselves.
                 self.annotations.append(node)
             elif isinstance(node, ast.Global):
                 self.globals.append(node)
