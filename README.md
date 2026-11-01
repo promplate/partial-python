@@ -43,7 +43,7 @@ try:
         async for event in events:
             print(event.index, event.unit.start, event.unit.end)
 except Exception:
-    print(executor.error)  # Original terminal exception.
+    print(executor.error)  # Recorded failure; retain its exception chain.
     print(executor.events)  # Units that completed successfully.
     print(executor.failed_unit)  # Attempted unit; effects may be partial or complete.
     print(executor.unexecuted)  # Sealed units never started.
@@ -51,13 +51,13 @@ except Exception:
     raise
 ```
 
-A stream owns its executor until exhausted or closed. It attempts to close its acquired source iterator on every exit path. Use `aclosing` when a consumer might break early. `feed`, `finish`, and another stream cannot run concurrently; reentrant calls fail immediately. Construction of an iterator alone does not start execution.
+A stream owns its executor until exhausted or closed. It attempts to close its acquired source iterator on every exit path. Use `aclosing` when a consumer might break early. `feed`, `finish`, and another stream cannot run concurrently; reentrant calls fail immediately. Construction of an iterator alone does not start execution. Keep iteration and closing in one task/context when source or executed code uses `ContextVar` tokens; `asyncio.timeout()` can bound that whole scope. [Task ownership](docs/codeact.md#task-ownership).
 
 Exceptions and cancellation are terminal. Previous side effects remain, and no unit is replayed. `events` contains earlier successes even when one `feed()` call later raises. `failed_unit` is absent for input/transport errors that occur outside a unit. `parser` is an immutable diagnostic snapshot, not an input interface.
 
 A unit can finish its body and produce all its effects after catching `CancelledError`. If it leaves the new cancellation request outstanding, the executor still raises cancellation, records `failed_unit`, and emits no success event. Missing events do not prove that effects are absent. A source that violates the close protocol by yielding during `aclose()` raises `RuntimeError`; closing failures are reported, not suppressed.
 
-Each `Execution` records a monotonic start/completion time and the original `CodeUnit`; it does not capture expression values or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`. Reuse the same namespace with a new executor for another logical model response. With no namespace argument, the executor starts with `__name__ = "__main__"`. A supplied dictionary is used as-is; include `"__name__": "__main__"` when it should behave as a script. No module is registered in `sys.modules`. [Retaining a source file](examples/tracebacks.py) gives ordinary tracebacks their original source lines, including later calls to functions defined by the stream.
+Each `Execution` records a monotonic start/completion time and the original `CodeUnit`; it does not capture expression values or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`. Reuse the same namespace with a new executor for another logical model response. This shares bindings, not compiler flags; each new stream must repeat any required future imports. With no namespace argument, the executor starts with `__name__ = "__main__"`. A supplied dictionary is used as-is; include `"__name__": "__main__"` when it should behave as a script. No module is registered in `sys.modules`. [Retaining a source file](examples/tracebacks.py) gives ordinary tracebacks their original source lines, including later calls to functions defined by the stream.
 
 ## What can be committed?
 

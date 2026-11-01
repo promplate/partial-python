@@ -27,7 +27,7 @@ Names describe the actual unit of work: one `CodeUnit` can contain a semicolon c
 
 Simple statements need a real logical NEWLINE or declared EOF. Entire compound statements wait for a distinct top-level successor or EOF, including one-line suites. Optional continuation clauses remain attached. Blank lines and comments never close a suite. Decorators travel with their definition.
 
-A partial name such as `e` or exact `else` at temporary EOF is still ambiguous. A name that cannot grow into a continuation clause, such as `next`, already proves a successor. Known operator tokens can establish the same boundary. Actual f/t-string start tokens and host-proven opaque string openers also establish successors before their contents finish. Unresolved lexical errors remain conservative.
+A partial name such as `e` or exact `else` at temporary EOF is still ambiguous. A name that cannot grow into a continuation clause, such as `next`, already proves a successor. Known operator, number and string tokens establish the same boundary, even when the literal itself may still grow. Actual f/t-string start tokens and host-proven opaque string openers also establish successors before their contents finish. Unresolved lexical errors remain conservative.
 
 ## Incremental scanning
 
