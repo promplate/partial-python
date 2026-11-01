@@ -8,7 +8,6 @@ execution. A full queue also pauses reading later provider status records.
 """
 
 import asyncio
-import sys
 from collections.abc import AsyncIterable, Callable
 
 from partial_python import Execution, Executor
@@ -78,9 +77,9 @@ async def execute_buffered(chunks: AsyncIterable[str], executor: Executor, *, ca
 async def run_scenario(status: str):
     # This sibling owns the example wire protocol; do not implement it twice.
     if __package__:
-        from .transport import MAX_RECORD_BYTES, SourceAborted, SourceProtocolError, close_writer, record_bytes, source_deltas
+        from .transport import MAX_RECORD_BYTES, SourceAborted, SourceProtocolError, closing_writer, record_bytes, source_deltas
     else:
-        from transport import MAX_RECORD_BYTES, SourceAborted, SourceProtocolError, close_writer, record_bytes, source_deltas
+        from transport import MAX_RECORD_BYTES, SourceAborted, SourceProtocolError, closing_writer, record_bytes, source_deltas
 
     entered = asyncio.Event()
     later_buffered = asyncio.Event()
@@ -118,7 +117,7 @@ async def run_scenario(status: str):
     async def serve(reader, writer):
         nonlocal final_sent
         try:
-            try:
+            async with closing_writer(writer):
                 writer.write(record_bytes({"type": "delta", "text": first}))
                 await writer.drain()
                 await asyncio.wait_for(entered.wait(), 2)
@@ -127,8 +126,6 @@ async def run_scenario(status: str):
                     final_sent = True
                     writer.write(record_bytes({"type": "done", "status": status, "source": first + later}))
                 await writer.drain()
-            finally:
-                await close_writer(writer, sys.exception())
         except BaseException as error:  # noqa: BLE001 - the scenario must observe callback and cleanup failures.
             if not server_finished.done():
                 server_finished.set_exception(error)
@@ -141,13 +138,11 @@ async def run_scenario(status: str):
     terminal = None
     async with server:
         reader, writer = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1], limit=MAX_RECORD_BYTES)
-        try:
+        async with closing_writer(writer):
             try:
                 await execute_buffered(source_deltas(reader), executor, on_buffered=buffered)
             except* (SourceAborted, SourceProtocolError) as errors:
                 terminal = errors
-        finally:
-            await close_writer(writer, sys.exception())
         await asyncio.wait_for(server_finished, 2)
     assert overlapped
     if status == "completed":

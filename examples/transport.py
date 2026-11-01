@@ -8,8 +8,8 @@ One connection carries one logical source stream; there is no retry or replay.
 
 import asyncio
 import json
-import sys
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from time import monotonic
 
 from partial_python import Execution, incremental_exec
@@ -80,33 +80,40 @@ async def source_deltas(reader: asyncio.StreamReader) -> AsyncIterator[str]:
             raise SourceProtocolError("unknown transport record type")
 
 
-async def close_writer(writer, primary: BaseException | None = None):
-    """Keep an existing failure primary, but never hide interrupted cleanup."""
+@asynccontextmanager
+async def closing_writer(writer):
+    """Own socket cleanup and preserve failures from this scope, not its caller."""
+    # sys.exception() can expose an unrelated exception handled by the caller.
+    primary = None
     try:
-        writer.close()
-        await writer.wait_closed()
-    except OSError as error:
-        # Treat GeneratorExit as shutdown here: a close failure must stay observable.
-        if primary is None or isinstance(primary, GeneratorExit):
-            raise
+        yield
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
         try:
-            BaseException.add_note(primary, f"Socket cleanup also failed: {type(error).__name__}: {error}")
-        except Exception:  # noqa: BLE001, S110 - secondary diagnostics must not replace the primary error.
-            pass
+            writer.close()
+            await writer.wait_closed()
+        except OSError as error:
+            # Treat GeneratorExit as shutdown here: a close failure must stay observable.
+            if primary is None or isinstance(primary, GeneratorExit):
+                raise
+            try:
+                BaseException.add_note(primary, f"Socket cleanup also failed: {type(error).__name__}: {error}")
+            except Exception:  # noqa: BLE001, S110 - secondary diagnostics must not replace the primary error.
+                pass
 
 
 async def execute_connection(host: str, port: int, namespace: dict) -> AsyncIterator[Execution]:
     """Own a socket for one source stream and close it when consumption stops."""
     reader, writer = await asyncio.open_connection(host, port, limit=MAX_RECORD_BYTES)
-    execution = incremental_exec(source_deltas(reader), namespace)
-    try:
-        async for event in execution:
-            yield event
-    finally:
+    async with closing_writer(writer):
+        execution = incremental_exec(source_deltas(reader), namespace)
         try:
-            await execution.aclose()
+            async for event in execution:
+                yield event
         finally:
-            await close_writer(writer, sys.exception())
+            await execution.aclose()
 
 
 async def run_scenario(status: str):
@@ -132,7 +139,7 @@ async def run_scenario(status: str):
     async def serve(reader, writer):
         nonlocal terminal_sent
         try:
-            try:
+            async with closing_writer(writer):
                 writer.write(record_bytes({"type": "delta", "text": prefix}))
                 await writer.drain()
                 # A handshake proves execution precedes final source delivery, without timing guesses.
@@ -146,8 +153,6 @@ async def run_scenario(status: str):
                     terminal_sent = True
                     writer.write(record_bytes({"type": "done", "status": status, "source": source}))
                     await writer.drain()
-            finally:
-                await close_writer(writer, sys.exception())
         except BaseException as error:  # noqa: BLE001 - the owning scenario must observe handler and cleanup failures.
             if not server_finished.done():
                 server_finished.set_exception(error)

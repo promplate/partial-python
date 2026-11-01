@@ -278,3 +278,26 @@ async def test_server_close_failure_reaches_scenario_instead_of_timing_out(monke
     with pytest.raises(OSError) as caught:
         await asyncio.wait_for(run_scenario("completed"), 3)
     assert caught.value is closing
+
+
+@pytest.mark.parametrize("failed", [False, True])
+async def test_socket_close_never_uses_callers_handled_exception(monkeypatch, failed):
+    unrelated, primary, closing = ValueError("caller already handled this"), ValueError("this tool failed"), OSError("socket close failed")
+    writer = CloseFailureWriter(closing)
+    source = "raise failure\n" if failed else ""
+    reader = reader_for({"type": "delta", "text": source}, {"type": "done", "status": "completed", "source": source})
+
+    async def connect(*args, **kwargs):
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    try:
+        raise unrelated
+    except ValueError:
+        with pytest.raises(ValueError if failed else OSError) as caught:
+            async for _ in execute_connection("fixture", 0, {"failure": primary}):
+                pass
+    assert caught.value is (primary if failed else closing)
+    assert not getattr(unrelated, "__notes__", ())
+    if failed:
+        assert any("socket close failed" in note for note in primary.__notes__)
