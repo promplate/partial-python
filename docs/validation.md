@@ -16,7 +16,7 @@ uv run python tools/check_corpus.py --limit 0 --chunk-max 512 --char-limit 2048
 uv build
 ```
 
-The full 831-case suite passed with 781 passed/50 skipped on 3.11, 794/37 on 3.12 and 3.13, 817/14 on 3.14, and all 831 passed on 3.15; syntax introduced later than the host version is skipped explicitly. The generated-grammar stress run was requested with 10,000 examples on each of 3.11, 3.14 and 3.15, seed 827173, with no failures. It combines nested control flow, optional clauses, strings, decorators, joining, indentation, line endings and transport partitions. Every generated program must compile successfully before testing; invalid generated input is a test failure, never silently discarded.
+The full 1,154-case suite passed with 1,102 passed/52 skipped on 3.11, 1,115/39 on 3.12 and 3.13, 1,140/14 on 3.14, and all 1,154 passed on 3.15; syntax introduced later than the host version is skipped explicitly. The generated-grammar stress run was requested with 10,000 examples on each of 3.11, 3.14 and 3.15, seed 827173, with no failures. It combines nested control flow, optional clauses, strings, decorators, joining, indentation, line endings and transport partitions. Every generated program must compile successfully before testing; invalid generated input is a test failure, never silently discarded.
 
 ## Real-source conformance
 
@@ -42,9 +42,10 @@ Measurements are local development observations, not cross-machine promises or m
 
 - A 1 MiB unfinished single-line literal, appended in 64-character chunks and read once at the end, fell from roughly 125 ms to 1.4 ms after deferred buffer joining.
 - Roughly 1 MiB of ordinary multiline literal text, delivered in 256-character chunks and finalized, parsed in about 23 ms after quote retry gating.
+- A valid 192 KB ordinary/raw literal with repeated escaped triple-quote candidates, delivered in 256-character chunks, fell from roughly 1.7 seconds to 6 ms after opaque-string backslash-parity filtering. At 256 KB with 64-character chunks, the same stress pattern fell from about 16 seconds to 9 ms; ordinary prose remained around 6 ms and a backslash-only body around 5–9 ms.
 - The 601,384-character standard-library `pydoc_data/topics.py` corpus check fell from about 35.5 seconds before container checkpoints to about 0.3 seconds with container checkpoints and string retry gating. The entire 3.14 corpus fell from about 48 seconds to 9–10 seconds.
 
-Work-count regression tests accompany timing observations. No general linear-time guarantee is made. A valid long literal containing repeated escaped candidate closing delimiters can still force repeated full rescans. Reading the entire growing `pending` value after every tiny chunk also requires repeated materialization. Hosts should bound source size and execution lifetime.
+Work-count regression tests accompany timing observations. No general linear-time guarantee is made. F/t-string nested grammars retain conservative candidate retries; malformed source can also force repeated full rescans. Reading the entire growing `pending` value after every tiny chunk also requires repeated materialization. Hosts should bound source size and execution lifetime.
 
 ## End-to-end scope
 

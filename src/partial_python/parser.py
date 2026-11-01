@@ -94,6 +94,7 @@ class _Boundary:
     delimiters: tuple[str, ...] = ()
     logical_root: bool = True
     quote: str = ""
+    opaque: bool = False
 
 
 def _quote_delimiter(token_text: str) -> str:
@@ -101,7 +102,32 @@ def _quote_delimiter(token_text: str) -> str:
     return marker[:3] if marker[:3] in ("'''", '"""') else marker[:1]
 
 
-def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tuple[int, int]] | None:
+def _escaped_before(text: str, index: int, before_window: bool) -> bool:
+    start = index
+    while start and text[start - 1] == "\\":
+        start -= 1
+    return bool((index - start) % 2) ^ (before_window if start == 0 else False)
+
+
+def _quote_window(text: str, before_window: bool) -> tuple[str, bool]:
+    # Two quote characters suffice for a split triple delimiter, but a slash
+    # run can span any number of chunks. Carry its parity before this window.
+    start = max(len(text) - 2, 0)
+    return text[start:], _escaped_before(text, start, before_window)
+
+
+def _has_unescaped_closer(text: str, quote: str, before_window: bool) -> bool:
+    start = 0
+    while (candidate := text.find(quote, start)) >= 0:
+        if not _escaped_before(text, candidate, before_window):
+            return True
+        # An escaped quote followed by three more quotes closes at the second
+        # quote. Preserve overlapping candidates instead of skipping a delimiter.
+        start = candidate + 1
+    return False
+
+
+def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tuple[int, int], bool] | None:
     eof = (source.count("\n") + 1, len(source.rsplit("\n", 1)[-1]))
     # Ask the host tokenizer to identify an opaque STRING crossing actual EOF.
     # Four quotes also close a trailing backslash. Never reinterpret an already
@@ -110,7 +136,11 @@ def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tupl
         try:
             for token in tokenize.generate_tokens(io.StringIO(source + quote * 4).readline):
                 if token.type == tokenize.STRING and last_end <= token.start < eof < token.end:
-                    return _quote_delimiter(token.string), token.start
+                    quote = _quote_delimiter(token.string)
+                    # Pre-3.12 f-strings are opaque STRING tokens too; their
+                    # expression grammar must stay on the conservative path.
+                    prefix = token.string[: token.string.index(quote)].lower()
+                    return quote, token.start, "f" not in prefix and "t" not in prefix
         except (tokenize.TokenError, IndentationError, SyntaxError, UnicodeError):
             pass
     return None
@@ -192,7 +222,7 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
         if string_quotes:
             yield _Boundary(0, "string", quote=string_quotes[0])
         elif opening := _unfinished_quote(prefix + source, last_end):
-            quote, position = opening
+            quote, position, opaque = opening
             if logical_start:
                 start = original_offsets[offset(position)]
                 # A host-proven string opener already excludes continuation
@@ -200,7 +230,7 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                 if logical_root:
                     yield _Boundary(start, "successor")
                 yield _Boundary(start, "started")
-            yield _Boundary(0, "string", quote=quote)
+            yield _Boundary(0, "string", quote=quote, opaque=opaque)
         # Valid earlier tokens remain useful even when the unfinished suffix is not tokenizable.
         return
 
@@ -218,6 +248,8 @@ class Parser:
         self._chunks: list[str] = []
         self._await_quote = ""
         self._quote_tail = ""
+        self._quote_opaque = False
+        self._quote_tail_escaped = False
         self._offset = 0
         self._line = 1
         self._closed = False
@@ -259,11 +291,14 @@ class Parser:
         self._ensure_open()
         if not isinstance(delta, str):
             raise TypeError("delta must be str")
-        if self._await_quote and self._await_quote not in self._quote_tail + delta:
-            if delta:
-                self._chunks.append(delta)
-                self._quote_tail = (self._quote_tail + delta)[-2:]
-            return ()
+        if self._await_quote:
+            window = self._quote_tail + delta
+            closer = _has_unescaped_closer(window, self._await_quote, self._quote_tail_escaped) if self._quote_opaque else self._await_quote in window
+            if not closer:
+                if delta:
+                    self._chunks.append(delta)
+                    self._quote_tail, self._quote_tail_escaped = _quote_window(window, self._quote_tail_escaped)
+                return ()
         self._await_quote = ""
         resolves_cr = (self._chunks[-1] if self._chunks else self._pending).endswith("\r")
         # Once the first token is unambiguous, only a physical line ending can
@@ -288,7 +323,8 @@ class Parser:
                 if kind == "string":
                     if window_end == len(self._pending):
                         self._await_quote = boundary.quote
-                        self._quote_tail = self._pending[-2:]
+                        self._quote_opaque = boundary.opaque
+                        self._quote_tail, self._quote_tail_escaped = _quote_window(self._pending, False)
                     continue
                 if kind == "started":
                     self._line_started = True
