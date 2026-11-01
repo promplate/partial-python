@@ -48,7 +48,7 @@ The stream reserves the executor from its first consumption through exhaustion o
 
 The method maintains the same queue/error journal as direct calls and attempts to close its acquired source iterator on exit. Normal validated source exhaustion permits `finish`; early consumer close abandons pending source and retains the unexecuted queue. Runtime failure, invalid EOF, or source failure retain their original exception and source diagnostics. Cleanup failure must not disguise the original execution exception; cancellation during cleanup must not leave a successful terminal state.
 
-An async generator that yields while processing `aclose()` violates Python's close protocol and raises `RuntimeError`. With no earlier failure, the executor records that error and enters `failed`; after an execution failure, an ordinary cleanup exception is attached to the original error. The library does not suppress the violation or promise that a broken iterator has finished releasing its resources.
+An async generator that yields while processing `aclose()` violates Python's close protocol and raises `RuntimeError`. With no earlier failure, the executor records that error and enters `failed`; after an execution failure, an ordinary cleanup exception is attached to the original error as a best-effort note. Broken exception formatting cannot replace that primary failure; a new cancellation or process-level interrupt still propagates. The library does not suppress the violation or promise that a broken iterator has finished releasing its resources.
 
 ```python
 from contextlib import aclosing

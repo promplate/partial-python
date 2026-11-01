@@ -247,6 +247,61 @@ async def test_cleanup_failure_keeps_primary_execution_error_in_diagnostics():
     assert any("source close failed" in note for note in captured.value.__notes__)
 
 
+@pytest.mark.parametrize("broken", ["repr", "add_note", "notes"])
+async def test_secondary_diagnostics_cannot_replace_primary_execution_failure(broken):
+    primary = ZeroDivisionError("original failure")
+    cleanup = OSError("source close failed")
+
+    class BadDetail:
+        def __repr__(self):
+            raise ValueError("detail repr failed")
+
+    if broken == "repr":
+        cleanup = OSError(BadDetail())
+    elif broken == "add_note":
+        primary.add_note = None
+    else:
+        primary.__notes__ = object()
+
+    async def source():
+        try:
+            yield "raise primary\nnever = 1\n"
+        finally:
+            raise cleanup
+
+    executor = Executor({"primary": primary})
+    with pytest.raises(ZeroDivisionError) as captured:
+        await anext(executor.stream(source()))
+    assert captured.value is executor.error is primary
+    assert executor.state == "failed" and executor.failed_unit.source == "raise primary\n"
+    assert [unit.source for unit in executor.unexecuted] == ["never = 1\n"]
+    if broken == "add_note":
+        assert any("source close failed" in note for note in primary.__notes__)
+
+
+@pytest.mark.parametrize("exception", [asyncio.CancelledError, KeyboardInterrupt, SystemExit])
+async def test_interrupt_while_formatting_secondary_diagnostics_remains_terminal(exception):
+    interruption = exception("interrupted diagnostics")
+
+    class BadDetail:
+        def __repr__(self):
+            raise interruption
+
+    async def source():
+        try:
+            yield "1 / 0\n"
+        finally:
+            raise OSError(BadDetail())
+
+    executor = Executor()
+    with pytest.raises(exception) as captured:
+        await anext(executor.stream(source()))
+    assert captured.value is executor.error is interruption
+    assert executor.state == "failed"
+    with pytest.raises(RuntimeError, match="executor is failed"):
+        await executor.finish()
+
+
 async def test_stream_cancellation_records_failed_unit_and_preserves_queue():
     entered = asyncio.Event()
 

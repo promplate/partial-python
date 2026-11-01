@@ -297,7 +297,15 @@ class Executor:
                     self._error = cleanup_error
                     self._state = "failed"
                     raise
-                primary_error.add_note(f"Source iterator cleanup also failed: {cleanup_error!r}")
+                try:
+                    BaseException.add_note(primary_error, f"Source iterator cleanup also failed: {cleanup_error!r}")
+                except Exception:  # noqa: BLE001, S110 - secondary diagnostics must not replace the primary error.
+                    # A broken exception repr or notes attribute must not replace
+                    # the execution failure merely while attaching diagnostics.
+                    pass
+                except BaseException as note_error:
+                    self._error = note_error
+                    raise
             finally:
                 self._busy = False
 
