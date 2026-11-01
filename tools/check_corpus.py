@@ -52,7 +52,7 @@ def tree(source, filename, flags=0):
 
 
 def signature(node):
-    return ast.dump(node, include_attributes=False)
+    return ast.dump(node, include_attributes=True)
 
 
 def new_future_flags(module):
@@ -98,6 +98,7 @@ def check_partition(source, path, expected, mode, chunk_max, seed, reference=Non
             require((unit.start_line, unit.end_line) == (line, end_line), "physical line span", (line, end_line), (unit.start_line, unit.end_line))
             context["stage"] = "unit_ast"
             module = tree(unit.source, str(path), flags)
+            ast.increment_lineno(module, unit.start_line - 1)
             for node in module.body:
                 actual = signature(node)
                 require(node_index < len(expected), "AST prefix length", len(expected), node_index + 1)

@@ -24,6 +24,8 @@ SMALL_PROGRAMS = [
 ]
 
 CHECKPOINT_PROGRAMS = [
+    "if ready:\n    pass\n \fπ = '🙂'; value = π\n",
+    "if ready:\n    pass\n\\\n\fvalue = 1\n",
     "if condition:\n\tfirst()\n\tif other:\n\t\tsecond()\n\tthird()\nlast()\n",
     "if condition:\n    first()\n\n # comment\n\t# another\n    second()\nlast()\n",
     "if condition:\n    first()\n\felse:\n    second()\nlast()\n",
@@ -38,8 +40,10 @@ CHECKPOINT_PROGRAMS = [
 ]
 
 
-def bodies(source):
-    return [ast.dump(node, include_attributes=False) for node in ast.parse(source).body]
+def bodies(source, start_line=1):
+    tree = ast.parse(source)
+    ast.increment_lineno(tree, start_line - 1)
+    return [ast.dump(node, include_attributes=True) for node in tree.body]
 
 
 def assert_prefixes(source, chunks):
@@ -52,14 +56,14 @@ def assert_prefixes(source, chunks):
         received += chunk
         for statement in parser.feed(chunk):
             emitted.append(statement)
-            nodes.extend(bodies(statement.source))
+            nodes.extend(bodies(statement.source, statement.start_line))
         committed = "".join(statement.source for statement in emitted)
         assert received == committed + parser.pending
         assert nodes == expected[: len(nodes)]
         assert parser.committed == len(committed)
     emitted.extend(parser.finish())
     assert "".join(statement.source for statement in emitted) == source
-    assert [node for statement in emitted for node in bodies(statement.source)] == expected
+    assert [node for statement in emitted for node in bodies(statement.source, statement.start_line)] == expected
     return emitted
 
 

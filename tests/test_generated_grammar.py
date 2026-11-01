@@ -115,7 +115,7 @@ STATEMENT = st.recursive(st.sampled_from(SIMPLE), lambda children: compound(chil
 @st.composite
 def programs(draw):
     statements = draw(st.lists(STATEMENT, min_size=1, max_size=4))
-    source = "".join(draw(st.sampled_from(TRIVIA)) + draw(st.sampled_from(["", "", "\f"])) + statement for statement in statements)
+    source = "".join(draw(st.sampled_from(TRIVIA)) + draw(st.sampled_from(["", "", "\f", " \t\f", "\\\n", "\\\n\f", "\\\n \t\f"])) + statement for statement in statements)
     source += draw(st.sampled_from(TRIVIA))
     # Naively converting both physical lines of an indented standalone join to
     # tabs raises native TabError; retain spaces for that generated construction.
@@ -130,9 +130,10 @@ def programs(draw):
     return source.replace("\n", draw(st.sampled_from(["\n", "\r\n", "\r"])))
 
 
-def ast_nodes(source):
+def ast_nodes(source, start_line=1):
     module = compile(source, "<generated-grammar>", "exec", flags=ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
-    return [ast.dump(node, include_attributes=False) for node in module.body]
+    ast.increment_lineno(module, start_line - 1)
+    return [ast.dump(node, include_attributes=True) for node in module.body]
 
 
 def inspect_partition(source, expected, chunks):
@@ -152,7 +153,7 @@ def inspect_partition(source, expected, chunks):
             line += unit.source.count("\n") + unit.source.count("\r") - unit.source.count("\r\n")
             assert unit.end_line == line
             committed = unit.end
-            actual.extend(ast_nodes(unit.source))
+            actual.extend(ast_nodes(unit.source, unit.start_line))
             assert actual == expected[: len(actual)]
             units.append(unit)
 
