@@ -25,6 +25,12 @@ SIMPLE = [
     "excepted()\n",
     "first(); second()\n",
     "pass\n",
+    "1e3\n",
+    "0x10\n",
+    ".5e+2\n",
+    "1j\n",
+    "'first' 'second'\n",
+    "r'''standalone\nsecond line'''\n",
     "await call(1)\n",
     "变量 = '🙂é'\n",
     "value = (\n    1\n    + 2\n)\n",
@@ -65,32 +71,35 @@ def compound(draw, children):
     kind = draw(st.sampled_from(["if", "for", "while", "with", "async with", "async for", "try", "try-finally", "except*", "match", "function"]))
     body = draw(children)
     body = draw(st.sampled_from(TRIVIA)) + body
+    # Unlike trailing trivia, explicit joining needs a following logical line.
+    # Its unfinished backslash must not seal the compound before its clause.
+    joining = draw(st.sampled_from(["", "\\\n"]))
     if kind == "if":
         source = "if condition:\n" + indent(body)
         if draw(st.booleans()):
-            source += "elif other:\n" + indent(draw(children))
+            source += joining + "elif other:\n" + indent(draw(children))
         if draw(st.booleans()):
-            source += "else:\n" + indent(draw(children))
+            source += joining + "else:\n" + indent(draw(children))
         return source
     if kind in {"for", "while", "async for"}:
         header = "while condition" if kind == "while" else kind + " item in items"
         source = header + ":\n" + indent(body)
         if draw(st.booleans()):
-            source += "else:\n" + indent(draw(children))
+            source += joining + "else:\n" + indent(draw(children))
         return source
     if kind in {"with", "async with"}:
         return kind + " manager() as value:\n" + indent(body)
     if kind == "try-finally":
-        return "try:\n" + indent(body) + "finally:\n" + indent(draw(children))
+        return "try:\n" + indent(body) + joining + "finally:\n" + indent(draw(children))
     if kind in {"try", "except*"}:
         handler = "except*" if kind == "except*" else "except"
-        source = "try:\n" + indent(body) + handler + " ValueError:\n" + indent(draw(children))
+        source = "try:\n" + indent(body) + joining + handler + " ValueError:\n" + indent(draw(children))
         if draw(st.booleans()):
-            source += handler + " TypeError:\n" + indent(draw(children))
+            source += joining + handler + " TypeError:\n" + indent(draw(children))
         if draw(st.booleans()):
-            source += "else:\n" + indent(draw(children))
+            source += joining + "else:\n" + indent(draw(children))
         if draw(st.booleans()):
-            source += "finally:\n" + indent(draw(children))
+            source += joining + "finally:\n" + indent(draw(children))
         return source
     if kind == "match":
         return "match value:\n    case {'key': item}:\n" + indent(indent(body)) + "    case _:\n" + indent(indent(draw(children)))
@@ -108,7 +117,9 @@ def programs(draw):
     statements = draw(st.lists(STATEMENT, min_size=1, max_size=4))
     source = "".join(draw(st.sampled_from(TRIVIA)) + draw(st.sampled_from(["", "", "\f"])) + statement for statement in statements)
     source += draw(st.sampled_from(TRIVIA))
-    if draw(st.booleans()):
+    # Naively converting both physical lines of an indented standalone join to
+    # tabs raises native TabError; retain spaces for that generated construction.
+    if draw(st.booleans()) and not any(line.lstrip(" ") == "\\" for line in source.split("\n")):
         lines = source.split("\n")
         for index, line in enumerate(lines):
             spaces = len(line) - len(line.lstrip(" "))
