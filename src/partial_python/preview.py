@@ -146,7 +146,7 @@ def complete(source: str, allow: Allow = Allow.NONE) -> Completion:
     else:
         if allow:
             return Completion(source, "", "", committed)
-    suffix = _closures(source, allow) if allow else None
+    suffix = _closures(source[committed:], allow) if allow else None
     if suffix:
         try:
             tree = _parse(source + suffix)

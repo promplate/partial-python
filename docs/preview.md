@@ -52,7 +52,7 @@ The completer only appends suffixes to the entire input, or returns the parser-c
 
 No operands, dictionary values, identifiers, call arguments or exception handlers are invented. An incomplete call stays withheld even when closing its parenthesis would parse: `send(1` might still acquire more arguments. Fully written calls may be displayed under any nonzero policy, but are still not execution commitments.
 
-F-strings and template strings have nested grammars and are never repaired. A complete source containing them can still be displayed under any nonzero policy. The suffix scanner also conservatively declines repairs after a previously complete f-string or template string. Incomplete escape sequences and odd trailing backslashes remain withheld. A complete compound body may be displayed under a nonzero policy; its execution boundary is unchanged.
+F-strings and template strings have nested grammars and are never repaired. A complete source containing them can still be displayed under any nonzero policy. A previously committed f-string or template string does not block an independent pending tail. If an f/t string remains inside the uncommitted unit, even when that literal itself is complete, the suffix scanner still conservatively declines repairs. Incomplete escape sequences and odd trailing backslashes remain withheld. A complete compound body may be displayed under a nonzero policy; its execution boundary is unchanged.
 
 `SUITE` is deliberately a preview permission. `for item in items:` can display with a synthetic `pass`, but the real loop remains entirely pending in the execution parser. No API automatically converts a `Completion` object into an execution unit.
 

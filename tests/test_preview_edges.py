@@ -1,6 +1,7 @@
 """Adversarial display cases; these fixtures are not model evaluation evidence."""
 
 import ast
+import sys
 
 import pytest
 
@@ -148,3 +149,42 @@ def test_nested_string_grammars_are_never_repaired(prefix):
 def test_bad_text_type_does_not_decode_bytes_implicitly():
     with pytest.raises(TypeError, match="source must be str"):
         complete(b"value = 1\n", Allow.ALL)
+
+
+@pytest.mark.parametrize("kind", ["f", pytest.param("t", marks=pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14"))])
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("prefix_template", ["label = {literal}\n", "from __future__ import annotations\nlabel = {literal}\n", "if ready:\n    label = {literal}\n"])
+@pytest.mark.parametrize("tail,suffix", [("values = ['hel", "']"), ("values = [1,", "]"), ("if ready:\n    for item in items:", "\n        pass\n")])
+def test_committed_nested_strings_do_not_block_independent_tail_repairs(kind, newline, prefix_template, tail, suffix):
+    prefix = prefix_template.format(literal=kind + '"{1}"').replace("\n", newline)
+    source = prefix + tail.replace("\n", newline)
+    result = complete(source, Allow.ALL)
+    assert result.source == source + suffix and result.prefix == source
+    assert result.committed == len(prefix) and result.withheld == ""
+    assert result.diagnostic is not None and result.provisional
+    assert_display(source, result)
+
+
+@pytest.mark.parametrize("source", ['label = f"{1}"; values = [1,', 'if ready:\n    label = f"{1}"\n    values = [1,'])
+def test_nested_strings_in_the_same_pending_unit_still_block_repairs(source):
+    result = complete(source, Allow.ALL)
+    assert result.source == "" and result.committed == 0
+    assert result.withheld == source and not result.suffix
+    assert_display(source, result)
+
+
+@pytest.mark.parametrize("tail", ["send(['hel", "broken = ]\nvalues = ['hel", 'values = f"unfinished {name'])
+def test_committed_string_history_does_not_bypass_tail_restrictions(tail):
+    prefix = 'label = f"{1}"\n'
+    source = prefix + tail
+    result = complete(source, Allow.ALL)
+    assert result.source == prefix and result.committed == len(prefix)
+    assert result.withheld == tail and not result.suffix
+    assert_display(source, result)
+
+
+def test_comments_after_committed_nested_strings_keep_their_own_lexical_context():
+    source = 'label = f"{1}"\r\n# f"ignored"\r\nvalues = [1, # comment'
+    result = complete(source, Allow.BRACKET)
+    assert result.source == source + "\n]"
+    assert_display(source, result)
