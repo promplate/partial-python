@@ -303,6 +303,7 @@ class Executor:
                 if cleanup_task is not None and cleanup_task.cancelling() > cancellations:
                     raise asyncio.CancelledError
             except BaseException as cleanup_error:
+                # The entry guard excludes stale errors from earlier terminal operations.
                 if self._error is None or not isinstance(cleanup_error, Exception):
                     self._error = cleanup_error
                     self._state = "failed"
