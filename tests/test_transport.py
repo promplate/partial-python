@@ -164,3 +164,8 @@ async def test_closing_network_consumer_closes_socket_without_executing_queue():
         for task in handlers:
             task.cancel()
         await asyncio.gather(*handlers, return_exceptions=True)
+
+
+async def test_empty_deltas_do_not_accumulate_unbounded_source_history():
+    reader = reader_for(*[{"type": "delta", "text": ""}] * 1000, {"type": "done", "status": "completed", "source": ""})
+    assert [delta async for delta in source_deltas(reader)] == []

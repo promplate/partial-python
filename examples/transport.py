@@ -63,8 +63,9 @@ async def source_deltas(reader: asyncio.StreamReader) -> AsyncIterator[str]:
             size += len(text)
             if size > MAX_SOURCE_CHARS:
                 raise SourceProtocolError("source exceeded the example's size limit")
-            parts.append(text)
-            yield text
+            if text:
+                parts.append(text)
+                yield text
         elif record.get("type") == "done":
             status = record.get("status")
             if status in ("truncated", "cancelled", "failed"):
