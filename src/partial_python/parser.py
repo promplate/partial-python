@@ -90,9 +90,30 @@ _STRING_ENDS = frozenset(getattr(tokenize, name) for name in ("FSTRING_END", "TS
 @dataclass(frozen=True, slots=True)
 class _Boundary:
     offset: int
-    kind: Literal["successor", "newline", "resume", "continuation", "started"]
+    kind: Literal["successor", "newline", "resume", "continuation", "started", "string"]
     delimiters: tuple[str, ...] = ()
     logical_root: bool = True
+    quote: str = ""
+
+
+def _quote_delimiter(token_text: str) -> str:
+    marker = token_text.lstrip("rRuUbBfFtT")
+    return marker[:3] if marker[:3] in ("'''", '"""') else marker[:1]
+
+
+def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tuple[int, int]] | None:
+    eof = (source.count("\n") + 1, len(source.rsplit("\n", 1)[-1]))
+    # Ask the host tokenizer to identify an opaque STRING crossing actual EOF.
+    # Four quotes also close a trailing backslash. Never reinterpret an already
+    # emitted token (e.g. r'' becoming r''' merely because of the probe suffix).
+    for quote in ("'", '"'):
+        try:
+            for token in tokenize.generate_tokens(io.StringIO(source + quote * 4).readline):
+                if token.type == tokenize.STRING and last_end <= token.start < eof < token.end:
+                    return _quote_delimiter(token.string), token.start
+        except (tokenize.TokenError, IndentationError, SyntaxError, UnicodeError):
+            pass
+    return None
 
 
 def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) -> Iterator[_Boundary]:
@@ -111,7 +132,8 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
     # enters a CodeUnit or the compiler. Checkpoints carry exact opener kinds
     # and the ORIGINAL logical line's indentation, not the prefix's column zero.
     stack = list(delimiters)
-    string_depth = 0
+    string_quotes: list[str] = []
+    last_end = (1, 0)
     lexical_error = False
     logical_start = not delimiters
     try:
@@ -119,10 +141,12 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
             if token.start[0] <= row_shift:
                 continue
             kind = token.type
+            if token.string and kind not in {tokenize.DEDENT, tokenize.ENDMARKER}:
+                last_end = token.end
             if kind in _STRING_STARTS:
-                string_depth += 1
+                string_quotes.append(_quote_delimiter(token.string))
             elif kind in _STRING_ENDS:
-                string_depth -= 1
+                string_quotes.pop()
             elif kind == tokenize.ERRORTOKEN:
                 lexical_error = True
             elif kind == tokenize.OP:
@@ -146,7 +170,7 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                 if logical_start and not stack:
                     yield _Boundary(original_offsets[offset(token.end)], "resume")
                     return
-                if stack and not string_depth and not lexical_error:
+                if stack and not string_quotes and not lexical_error:
                     # Never checkpoint f/t-string lexical state or a partial
                     # token. Persist only this completed NL snapshot, not any
                     # transient delimiter changes observed at temporary EOF.
@@ -154,7 +178,9 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                     return
             elif kind not in _TRIVIA and kind != tokenize.ENDMARKER:
                 if logical_start and logical_root:
-                    stable = offset(token.end) < len(source) or kind == tokenize.OP or (kind == tokenize.NAME and not any(clause.startswith(token.string) for clause in _CLAUSES))
+                    stable = (
+                        offset(token.end) < len(source) or kind == tokenize.OP or kind in _STRING_STARTS or (kind == tokenize.NAME and not any(clause.startswith(token.string) for clause in _CLAUSES))
+                    )
                     if stable and token.string not in _CLAUSES:
                         yield _Boundary(original_offsets[offset(token.start)], "successor")
                     if stable:
@@ -163,6 +189,18 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
                     yield _Boundary(original_offsets[offset(token.start)], "started")
                 logical_start = False
     except (tokenize.TokenError, IndentationError, SyntaxError, UnicodeError):
+        if string_quotes:
+            yield _Boundary(0, "string", quote=string_quotes[0])
+        elif opening := _unfinished_quote(prefix + source, last_end):
+            quote, position = opening
+            if logical_start:
+                start = original_offsets[offset(position)]
+                # A host-proven string opener already excludes continuation
+                # clauses; its unfinished contents need not delay a predecessor.
+                if logical_root:
+                    yield _Boundary(start, "successor")
+                yield _Boundary(start, "started")
+            yield _Boundary(0, "string", quote=quote)
         # Valid earlier tokens remain useful even when the unfinished suffix is not tokenizable.
         return
 
@@ -178,6 +216,8 @@ class Parser:
         self.filename = filename
         self._pending = ""
         self._chunks: list[str] = []
+        self._await_quote = ""
+        self._quote_tail = ""
         self._offset = 0
         self._line = 1
         self._closed = False
@@ -219,7 +259,13 @@ class Parser:
         self._ensure_open()
         if not isinstance(delta, str):
             raise TypeError("delta must be str")
-        resolves_cr = self._pending.endswith("\r")
+        if self._await_quote and self._await_quote not in self._quote_tail + delta:
+            if delta:
+                self._chunks.append(delta)
+                self._quote_tail = (self._quote_tail + delta)[-2:]
+            return ()
+        self._await_quote = ""
+        resolves_cr = (self._chunks[-1] if self._chunks else self._pending).endswith("\r")
         # Once the first token is unambiguous, only a physical line ending can
         # produce NEWLINE. Skip growing operands/literals until that can happen.
         if self._line_started and not resolves_cr and "\n" not in delta and "\r" not in delta:
@@ -239,6 +285,11 @@ class Parser:
             for boundary in _candidates(self._pending[scan:window_end], self._delimiters, self._logical_root):
                 end = scan + boundary.offset
                 kind = boundary.kind
+                if kind == "string":
+                    if window_end == len(self._pending):
+                        self._await_quote = boundary.quote
+                        self._quote_tail = self._pending[-2:]
+                    continue
                 if kind == "started":
                     self._line_started = True
                     continue
