@@ -149,6 +149,7 @@ def complete(source: str, allow: Allow = Allow.NONE) -> Completion:
         if isinstance(error, UnicodeEncodeError):
             # Padding is only for line coordinates. Encoding diagnostics must
             # retain the actual full input and its original character offsets.
+            # Encoding fails before grammar, so current flags cannot reinterpret history.
             try:
                 _parse(source, parser._flags)
             except (SyntaxError, UnicodeError) as original_error:

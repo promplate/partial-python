@@ -130,7 +130,7 @@ def _has_unescaped_closer(text: str, quote: str, before_window: bool) -> bool:
 
 def _unfinished_quote(source: str, last_end: tuple[int, int]) -> tuple[str, tuple[int, int]] | None:
     eof = (source.count("\n") + 1, len(source.rsplit("\n", 1)[-1]))
-    # Ask the host tokenizer to identify an opaque STRING crossing actual EOF.
+    # Ask the host tokenizer to identify an unfinished STRING crossing actual EOF.
     # Four quotes also close a trailing backslash. Never reinterpret an already
     # emitted token (e.g. r'' becoming r''' merely because of the probe suffix).
     for quote in ("'", '"'):
