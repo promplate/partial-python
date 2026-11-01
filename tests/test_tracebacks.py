@@ -1,7 +1,7 @@
 """Engineering fixtures for source-file lifetime, not model evaluation."""
 
 import asyncio
-import runpy
+import importlib.util
 import traceback
 from pathlib import Path
 
@@ -9,12 +9,15 @@ import pytest
 
 from partial_python import Executor
 
-example = runpy.run_path(str(Path(__file__).parents[1] / "examples" / "tracebacks.py"))
-record_and_execute = example["record_and_execute"]
+spec = importlib.util.spec_from_file_location("tracebacks_example", Path(__file__).parents[1] / "examples" / "tracebacks.py")
+assert spec is not None and spec.loader is not None
+example = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(example)
+record_and_execute = example.record_and_execute
 
 
 async def test_later_function_keeps_real_source_after_executor_and_writer_finish():
-    result = await example["main"]()
+    result = await example.main()
     assert result["state"] == "finished"
     assert result["stored"] == result["source"].encode("utf-8")
     assert [(frame.lineno, frame.name, frame.line) for frame in result["frames"]] == [(4, "fail_later", "raise RuntimeError(label)")]
