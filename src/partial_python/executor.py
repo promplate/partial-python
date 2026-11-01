@@ -19,7 +19,7 @@ from .parser import _FUTURES, CodeUnit, Parser, _source_line, _tree
 def _character_column(text: str, byte_column: int | None) -> int | None:
     if byte_column is None or byte_column <= 0:
         return byte_column
-    return len(text.encode()[:byte_column - 1].decode(errors="replace")) + 1
+    return len(text.encode()[: byte_column - 1].decode(errors="replace")) + 1
 
 
 ExecutionState = Literal["open", "finished", "failed", "aborted"]
@@ -75,7 +75,7 @@ class Executor:
     """
 
     def __init__(self, namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>"):
-        self._namespace = namespace if namespace is not None else {}
+        self._namespace = namespace if namespace is not None else {"__name__": "__main__"}
         self._parser = Parser(filename=filename)
         self._events: list[Execution] = []
         self._flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT

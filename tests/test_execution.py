@@ -354,3 +354,24 @@ async def test_deep_expression_does_not_recurse_through_module_policy_visitor():
     executor = Executor()
     await executor.feed(source)
     assert executor.namespace["value"] == expected["value"] == 600
+
+
+async def test_owned_namespace_has_script_identity_without_registering_a_module():
+    main = sys.modules["__main__"]
+    executor = Executor()
+    await executor.feed("if __name__ == '__main__':\n    ran = True\nclass Created:\n    pass\ndef created():\n    pass\n")
+    await executor.finish()
+    assert executor.namespace["ran"] is True
+    assert executor.namespace["Created"].__module__ == "__main__"
+    assert executor.namespace["created"].__module__ == "__main__"
+    assert sys.modules["__main__"] is main
+
+
+@pytest.mark.parametrize("namespace", [{}, {"__name__": "provided"}])
+async def test_supplied_namespace_identity_is_not_replaced_or_seeded(namespace):
+    expected = namespace.copy()
+    executor = Executor(namespace)
+    assert executor.namespace is namespace
+    assert namespace == expected
+    await executor.feed("value = 1\n")
+    assert namespace.get("__name__") in (None, "provided")
