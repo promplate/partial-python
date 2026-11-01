@@ -24,6 +24,7 @@ class CodeUnit:
 
 _COMPOUND = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try, ast.TryStar, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Match)
 _CLAUSES = frozenset({"elif", "else", "except", "finally"})
+_OPENERS = {")": "(", "]": "[", "}": "{"}
 _LINE_END = re.compile(r"[\r\n]")
 _FUTURES = {name: getattr(__future__, name).compiler_flag for name in __future__.all_feature_names}
 _TRIVIA = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.ENCODING})
@@ -59,7 +60,8 @@ def _line_end(source: str, start: int) -> int:
     match = _LINE_END.search(source, start)
     if match is None:
         return len(source)
-    # One lookahead character resolves a bare CR versus the first half of CRLF.
+    # Include one lookahead character even after a bare CR: _normalize holds a
+    # trailing CR until it can distinguish CRLF. This is a probe window, not a unit.
     return min(match.end() + (match[0] == "\r"), len(source))
 
 
@@ -182,7 +184,7 @@ def _candidates(source: str, delimiters: tuple[str, ...], logical_root: bool) ->
             elif kind == tokenize.OP:
                 if token.string in "([{":
                     stack.append(token.string)
-                elif token.string in ")]}" and (not stack or stack.pop() != {")": "(", "]": "[", "}": "{"}[token.string]):
+                elif token.string in ")]}" and (not stack or stack.pop() != _OPENERS[token.string]):
                     return
             if kind == tokenize.INDENT:
                 logical_root = False

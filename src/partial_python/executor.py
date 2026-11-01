@@ -126,7 +126,7 @@ class Executor:
     def _syntax_error(self, error_type: type[SyntaxError], message: str, statement: CodeUnit, node: ast.stmt, *, shifted: bool = False) -> SyntaxError:
         line = node.lineno - (statement.start_line - 1 if shifted else 0)
         text = _source_line(statement.source, line)
-        column = len(text.encode()[: node.col_offset].decode(errors="replace")) + 1
+        column = _character_column(text, node.col_offset + 1)
         return error_type(message, (self._parser.filename, statement.start_line + line - 1, column, text))
 
     def _compile(self, statement: CodeUnit) -> CodeType:
