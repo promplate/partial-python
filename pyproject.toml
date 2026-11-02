@@ -15,7 +15,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "hypothesis>=6",
-    "ruff>=0.9",
+    "ruff~=0.17.3",
     "build>=1",
     "mypy>=2.4.1",
 ]
@@ -31,7 +31,18 @@ line-length = 200
 target-version = "py311"
 
 [tool.ruff.lint]
-extend-select = ["I", "UP", "W", "FURB", "C4", "FA", "ISC", "PIE", "PTH", "RSE"]
+# Keep extensions disjoint from Ruff 0.17 defaults; recheck when upgrading.
+extend-select = [
+    "I002",
+    "UP013", "UP015", "UP042",
+    "W191", "W291", "W292", "W293", "W505",
+    "FURB110", "FURB116", "FURB164", "FURB171", "FURB187",
+    "C416", "C420",
+    "ISC001", "ISC002", "ISC003",
+    "PTH100", "PTH101", "PTH102", "PTH103", "PTH104", "PTH105", "PTH106", "PTH107", "PTH108", "PTH109", "PTH110", "PTH111", "PTH112", "PTH113", "PTH114", "PTH115", "PTH116",
+    "PTH117", "PTH118", "PTH119", "PTH120", "PTH121", "PTH122", "PTH123", "PTH201", "PTH202", "PTH203", "PTH204", "PTH205", "PTH206", "PTH207", "PTH208", "PTH211",
+    "RSE102",
+]
 
 [tool.mypy]
 strict = true
