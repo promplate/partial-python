@@ -4,52 +4,15 @@ import ast
 import sys
 
 import pytest
+from _assertions import assert_partition, ast_nodes, count_work
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-import partial_python.parser as parser_module
 from partial_python import Parser
 
 TSTRINGS = pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14")
 PEP701 = pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 701 requires Python 3.12")
 PREFIXES = ["", "r", "R", "b", "u", "br", "Rb", "bR", "rb", "f", "F", "fr", "rf", pytest.param("t", marks=TSTRINGS), pytest.param("rt", marks=TSTRINGS)]
-
-
-def ast_nodes(source):
-    module = compile(source, "<string-retry>", "exec", flags=ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
-    return [ast.dump(node, include_attributes=False) for node in module.body]
-
-
-def check_stream(source, chunks):
-    expected = ast_nodes(source)
-    parser = Parser()
-    units = []
-    actual = []
-    received = committed = 0
-    line = 1
-
-    def inspect(batch):
-        nonlocal committed, line
-        for unit in batch:
-            assert unit.start == committed
-            assert unit.end == unit.start + len(unit.source) <= received
-            assert unit.source == source[unit.start : unit.end]
-            assert unit.start_line == line
-            line += unit.source.count("\n") + unit.source.count("\r") - unit.source.count("\r\n")
-            assert unit.end_line == line
-            committed = unit.end
-            actual.extend(ast_nodes(unit.source))
-            assert actual == expected[: len(actual)]
-            units.append(unit)
-
-    for chunk in chunks:
-        received += len(chunk)
-        inspect(parser.feed(chunk))
-        assert parser.pending == source[committed:received]
-    inspect(parser.finish())
-    assert committed == len(source)
-    assert actual == expected
-    return units
 
 
 @pytest.mark.parametrize("prefix", PREFIXES)
@@ -114,10 +77,10 @@ def test_four_quotes_close_after_an_odd_trailing_backslash(prefix, quote):
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 def test_closer_split_at_every_boundary_preserves_unicode_and_physical_lines(quote, newline):
     source = "变量 = " + quote * 3 + "🙂" + newline + "é" + newline + quote * 3 + newline + "next()" + newline
-    expected = check_stream(source, [source])
-    assert check_stream(source, source) == expected
+    expected = assert_partition(source, [source])
+    assert assert_partition(source, source) == expected
     for split in range(len(source) + 1):
-        assert check_stream(source, [source[:split], source[split:]]) == expected
+        assert assert_partition(source, [source[:split], source[split:]]) == expected
 
 
 def test_host_proven_standalone_triple_opener_releases_prior_compound():
@@ -169,9 +132,9 @@ INTERPOLATED = [
 @pytest.mark.parametrize("chunks", INTERPOLATED)
 def test_nested_interpolation_and_candidate_closers_are_always_retokenized(chunks):
     source = "".join(chunks)
-    expected = check_stream(source, [source])
-    assert check_stream(source, chunks) == expected
-    assert check_stream(source, source) == expected
+    expected = assert_partition(source, [source])
+    assert assert_partition(source, chunks) == expected
+    assert assert_partition(source, source) == expected
 
 
 @pytest.mark.parametrize("source", ["value = '''first\nlast\n", "value = r'''first\nlast\n", 'value = f"""first\n{name}\n'])
@@ -190,30 +153,11 @@ def test_finish_validates_original_unclosed_string_despite_retry_gate(source):
 @pytest.mark.parametrize("prefix", ["", "r", "b", "f", pytest.param("t", marks=TSTRINGS)])
 @pytest.mark.parametrize("quote", ["'", '"'])
 def test_multiline_prose_with_nonclosing_quotes_has_linear_scanner_work(monkeypatch, prefix, quote):
-    original_normalize = parser_module._normalize
-    original_tokens = parser_module.tokenize.generate_tokens
-
     def measure(count):
         opening = "value = " + prefix + quote * 3 + "\n"
         line = "A line with 'single' and \"double\" quotes, [brackets], and plain text.\n"
         source = opening + line * count + quote * 3 + "\n"
-        work = {"normalized": 0, "tokenized": 0}
-
-        def normalize(text):
-            work["normalized"] += len(text)
-            return original_normalize(text)
-
-        def tokens(readline):
-            def read():
-                text = readline()
-                work["tokenized"] += len(text)
-                return text
-
-            return original_tokens(read)
-
-        with monkeypatch.context() as patch:
-            patch.setattr(parser_module, "_normalize", normalize)
-            patch.setattr(parser_module.tokenize, "generate_tokens", tokens)
+        with count_work(monkeypatch) as work:
             parser = Parser()
             assert parser.feed(opening) == ()
             for _ in range(count):
@@ -223,7 +167,7 @@ def test_multiline_prose_with_nonclosing_quotes_has_linear_scanner_work(monkeypa
 
     _, small = measure(64)
     length, large = measure(256)
-    for operation in small:
+    for operation in ("normalized", "tokenized"):
         assert large[operation] <= small[operation] * 5
         assert large[operation] < length * 8
 

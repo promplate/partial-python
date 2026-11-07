@@ -4,8 +4,8 @@ import ast
 import sys
 
 import pytest
+from _assertions import count_work
 
-import partial_python.parser as parser_module
 from partial_python import Parser
 
 OPAQUE_PREFIXES = ["", "r", "R", "u", "U", "b", "B", "br", "bR", "Br", "BR", "rb", "rB", "Rb", "RB"]
@@ -163,31 +163,12 @@ def test_skipped_escaped_closers_preserve_native_finish_diagnostics(newline, rea
 @pytest.mark.parametrize("prefix", ["", "r", "b", "br", "u", "f", "rf", pytest.param("t", marks=pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14"))])
 @pytest.mark.parametrize("quote", ["'", '"'])
 def test_repeated_escaped_triple_quotes_have_linear_scanner_work(monkeypatch, prefix, quote):
-    original_normalize = parser_module._normalize
-    original_tokens = parser_module.tokenize.generate_tokens
-
     def measure(count):
         opening = "value = " + prefix + quote * 3 + "first\n"
         line = "\\" * 33 + quote * 3 + " remains literal text\n"
         source = opening + line * count + quote * 3 + "\n"
         nodes(source)
-        work = {"normalized": 0, "tokenized": 0}
-
-        def normalize(text):
-            work["normalized"] += len(text)
-            return original_normalize(text)
-
-        def tokens(readline):
-            def read():
-                text = readline()
-                work["tokenized"] += len(text)
-                return text
-
-            return original_tokens(read)
-
-        with monkeypatch.context() as patch:
-            patch.setattr(parser_module, "_normalize", normalize)
-            patch.setattr(parser_module.tokenize, "generate_tokens", tokens)
+        with count_work(monkeypatch) as work:
             parser = Parser()
             assert parser.feed(opening) == ()
             for _ in range(count):
@@ -197,7 +178,7 @@ def test_repeated_escaped_triple_quotes_have_linear_scanner_work(monkeypatch, pr
 
     _, small = measure(64)
     length, large = measure(256)
-    for operation in small:
+    for operation in ("normalized", "tokenized"):
         assert large[operation] <= small[operation] * 5
         assert large[operation] < length * 12
 

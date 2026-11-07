@@ -4,6 +4,7 @@ import ast
 import sys
 
 import pytest
+from _assertions import assert_partition, count_work
 
 import partial_python.parser as parser_module
 from partial_python import Parser
@@ -43,51 +44,12 @@ PROGRAMS = [
 ]
 
 
-def nodes(source):
-    module = compile(source, "<checkpoint-test>", "exec", flags=ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
-    return [ast.dump(node, include_attributes=False) for node in module.body]
-
-
-def assert_stream(source, chunks):
-    expected = nodes(source)
-    parser = Parser()
-    units = []
-    actual = []
-    received = committed = 0
-    line = 1
-
-    def inspect(batch):
-        nonlocal committed, line
-        for unit in batch:
-            assert unit.start == committed
-            assert unit.end == unit.start + len(unit.source)
-            assert unit.end <= received
-            assert unit.source == source[unit.start : unit.end]
-            assert unit.start_line == line
-            line += unit.source.count("\n") + unit.source.count("\r") - unit.source.count("\r\n")
-            assert unit.end_line == line
-            committed = unit.end
-            actual.extend(nodes(unit.source))
-            assert actual == expected[: len(actual)]
-            units.append(unit)
-
-    for chunk in chunks:
-        received += len(chunk)
-        inspect(parser.feed(chunk))
-        assert parser.pending == source[committed:received]
-        assert parser.committed == committed
-    inspect(parser.finish())
-    assert committed == len(source)
-    assert actual == expected
-    return units
-
-
 @pytest.mark.parametrize("source", PROGRAMS)
 def test_delimiter_context_replay_preserves_every_partition(source):
-    expected = assert_stream(source, [source])
-    assert assert_stream(source, source) == expected
+    expected = assert_partition(source, [source])
+    assert assert_partition(source, source) == expected
     for split in range(len(source) + 1):
-        assert assert_stream(source, [source[:split], source[split:]]) == expected
+        assert assert_partition(source, [source[:split], source[split:]]) == expected
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
@@ -103,9 +65,9 @@ def test_internal_checkpoint_preserves_original_indentation(newline):
 @pytest.mark.parametrize("newline", ["\r\n", "\r"])
 def test_unicode_container_offsets_across_newline_partitions(newline):
     source = "变量 = [\n    '🙂',\n    {'é': [\n        1,\n    ]},\n]\n下一步()\n".replace("\n", newline)
-    expected = assert_stream(source, [source])
+    expected = assert_partition(source, [source])
     for split in range(len(source) + 1):
-        assert assert_stream(source, [source[:split], source[split:]]) == expected
+        assert assert_partition(source, [source[:split], source[split:]]) == expected
 
 
 def test_closing_delimiter_before_explicit_continuation_is_not_saved_early():
@@ -120,7 +82,7 @@ def test_closing_delimiter_before_explicit_continuation_is_not_saved_early():
 def test_new_openers_and_closers_after_checkpoint_are_not_replayed_twice():
     chunks = ["value = [\n", "(", "1", ",", "\n", "2", ",\n", ")", ",\n", "]", "\n"]
     source = "".join(chunks)
-    assert assert_stream(source, chunks) == assert_stream(source, [source])
+    assert assert_partition(source, chunks) == assert_partition(source, [source])
 
 
 @pytest.mark.parametrize("tail", ["value = [\n    1)\nnext()\n", "value = ({\n    'x': 1]\nnext()\n", "value = [\n    1,\n"])
@@ -161,28 +123,9 @@ def test_synthetic_delimiters_never_reach_the_ast_compiler(monkeypatch):
 @pytest.mark.parametrize("chunk_size", [1, 16, 1_000_000])
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_long_data_containers_have_linear_normalization_and_tokenizer_work(monkeypatch, chunk_size, newline):
-    original_normalize = parser_module._normalize
-    original_tokens = parser_module.tokenize.generate_tokens
-
     def measure(count):
         source = newline.join(["data = {", *["    'key': [1, 2, 3],"] * count, "}", ""])
-        work = {"normalized": 0, "tokenized": 0}
-
-        def normalize(text):
-            work["normalized"] += len(text)
-            return original_normalize(text)
-
-        def tokens(readline):
-            def read():
-                text = readline()
-                work["tokenized"] += len(text)
-                return text
-
-            return original_tokens(read)
-
-        with monkeypatch.context() as patch:
-            patch.setattr(parser_module, "_normalize", normalize)
-            patch.setattr(parser_module.tokenize, "generate_tokens", tokens)
+        with count_work(monkeypatch) as work:
             parser = Parser()
             units = []
             for offset in range(0, len(source), chunk_size):
@@ -193,6 +136,6 @@ def test_long_data_containers_have_linear_normalization_and_tokenizer_work(monke
 
     _, small = measure(64)
     length, large = measure(256)
-    for operation in small:
+    for operation in ("normalized", "tokenized"):
         assert large[operation] <= small[operation] * 5
         assert large[operation] < length * 8

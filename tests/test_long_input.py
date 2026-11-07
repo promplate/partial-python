@@ -1,8 +1,8 @@
 """Bound avoidable rescans without promising linear streaming of a giant token."""
 
 import pytest
+from _assertions import count_work
 
-import partial_python.parser as parser_module
 from partial_python import Parser
 
 REGIONS = [
@@ -14,16 +14,7 @@ REGIONS = [
 
 def measured_parse(monkeypatch, opening, line, closing, count, *, bulk):
     source = opening + line * count + closing
-    normalized = 0
-    original_normalize = parser_module._normalize
-
-    def normalize(text):
-        nonlocal normalized
-        normalized += len(text)
-        return original_normalize(text)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(parser_module, "_normalize", normalize)
+    with count_work(monkeypatch) as work:
         parser = Parser()
         if bulk:
             statements = parser.feed(source)
@@ -35,7 +26,7 @@ def measured_parse(monkeypatch, opening, line, closing, count, *, bulk):
         assert [statement.source for statement in statements] == [source]
         assert parser.pending == ""
         assert parser.finish() == ()
-    return len(source), normalized
+    return len(source), work["normalized"]
 
 
 @pytest.mark.parametrize("opening,line,closing", REGIONS)
@@ -59,26 +50,16 @@ def test_bulk_multiline_region_uses_geometrically_growing_probe_windows(monkeypa
 @pytest.mark.parametrize("opening,closing", [("value = '", "'\n"), ("consume('", "')\n"), ("value = [", "]\n"), ("[", "]\n")])
 @pytest.mark.parametrize("chunk_size", [1, 16, 256])
 def test_started_physical_line_is_not_retokenized_without_a_newline(monkeypatch, opening, closing, chunk_size):
-    original_normalize = parser_module._normalize
-
     def measured(size):
         source = opening + ("1," * size if "[" in opening else "a" * size) + closing
-        work = 0
-
-        def normalize(text):
-            nonlocal work
-            work += len(text)
-            return original_normalize(text)
-
-        with monkeypatch.context() as patch:
-            patch.setattr(parser_module, "_normalize", normalize)
+        with count_work(monkeypatch) as work:
             parser = Parser()
             statements = []
             for offset in range(0, len(source), chunk_size):
                 statements.extend(parser.feed(source[offset : offset + chunk_size]))
             statements.extend(parser.finish())
         assert [statement.source for statement in statements] == [source]
-        return len(source), work
+        return len(source), work["normalized"]
 
     _, small_work = measured(1024)
     length, large_work = measured(4096)

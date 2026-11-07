@@ -8,10 +8,9 @@ import os
 import sys
 from itertools import pairwise
 
+from _assertions import assert_partition
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-from partial_python import Parser
 
 EXAMPLES = int(os.environ.get("PARTIAL_PYTHON_GRAMMAR_EXAMPLES", "150"))
 if EXAMPLES < 1:
@@ -130,55 +129,14 @@ def programs(draw):
     return source.replace("\n", draw(st.sampled_from(["\n", "\r\n", "\r"])))
 
 
-def ast_nodes(source, start_line=1):
-    module = compile(source, "<generated-grammar>", "exec", flags=ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
-    ast.increment_lineno(module, start_line - 1)
-    return [ast.dump(node, include_attributes=True) for node in module.body]
-
-
-def inspect_partition(source, expected, chunks):
-    parser = Parser()
-    units = []
-    actual = []
-    received = committed = 0
-    line = 1
-
-    def inspect(batch):
-        nonlocal committed, line
-        for unit in batch:
-            assert unit.start == committed
-            assert unit.end == unit.start + len(unit.source) <= received
-            assert unit.source == source[unit.start : unit.end]
-            assert unit.start_line == line
-            line += unit.source.count("\n") + unit.source.count("\r") - unit.source.count("\r\n")
-            assert unit.end_line == line
-            committed = unit.end
-            actual.extend(ast_nodes(unit.source, unit.start_line))
-            assert actual == expected[: len(actual)]
-            units.append(unit)
-
-    for chunk in chunks:
-        received += len(chunk)
-        inspect(parser.feed(chunk))
-        assert parser.committed == committed
-        assert parser.pending == source[committed:received]
-    inspect(parser.finish())
-    assert committed == len(source)
-    assert parser.pending == ""
-    assert parser.closed
-    assert actual == expected
-    return units
-
-
 @given(source=programs(), data=st.data())
 @settings(max_examples=EXAMPLES, deadline=None)
 def test_generated_valid_grammar_preserves_source_ast_prefixes_and_unit_partitions(source, data):
     # Full compilation also checks scope restrictions in generated combinations.
     # Failure here is a generator defect, not a reason to discard the example.
     compile(source, "<generated-grammar>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
-    expected = ast_nodes(source)
-    bulk = inspect_partition(source, expected, [source])
+    bulk = assert_partition(source, [source])
     cuts = sorted([0, *data.draw(st.lists(st.integers(min_value=0, max_value=len(source)), max_size=60), label="transport cuts"), len(source)])
     chunks = [source[start:end] for start, end in pairwise(cuts)]
-    assert inspect_partition(source, expected, chunks) == bulk
-    assert inspect_partition(source, expected, source) == bulk
+    assert assert_partition(source, chunks) == bulk
+    assert assert_partition(source, source) == bulk

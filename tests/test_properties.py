@@ -1,12 +1,12 @@
 """Conformance checks across transport partitions and real stdlib source files."""
 
-import ast
 import importlib.util
 import random
 import sys
 from pathlib import Path
 
 import pytest
+from _assertions import assert_partition
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -40,33 +40,6 @@ CHECKPOINT_PROGRAMS = [
 ]
 
 
-def bodies(source, start_line=1):
-    tree = ast.parse(source)
-    ast.increment_lineno(tree, start_line - 1)
-    return [ast.dump(node, include_attributes=True) for node in tree.body]
-
-
-def assert_prefixes(source, chunks):
-    parser = Parser()
-    expected = bodies(source)
-    emitted = []
-    nodes = []
-    received = ""
-    for chunk in chunks:
-        received += chunk
-        for statement in parser.feed(chunk):
-            emitted.append(statement)
-            nodes.extend(bodies(statement.source, statement.start_line))
-        committed = "".join(statement.source for statement in emitted)
-        assert received == committed + parser.pending
-        assert nodes == expected[: len(nodes)]
-        assert parser.committed == len(committed)
-    emitted.extend(parser.finish())
-    assert "".join(statement.source for statement in emitted) == source
-    assert [node for statement in emitted for node in bodies(statement.source, statement.start_line)] == expected
-    return emitted
-
-
 @given(source=st.sampled_from(SMALL_PROGRAMS), sizes=st.lists(st.integers(min_value=0, max_value=20), min_size=0, max_size=70))
 @settings(max_examples=120, deadline=None)
 def test_arbitrary_transport_partitions_preserve_every_emitted_ast_prefix(source, sizes):
@@ -78,14 +51,14 @@ def test_arbitrary_transport_partitions_preserve_every_emitted_ast_prefix(source
         if offset >= len(source):
             break
     chunks.append(source[offset:])
-    assert assert_prefixes(source, chunks) == assert_prefixes(source, [source])
+    assert assert_partition(source, chunks) == assert_partition(source, [source])
 
 
 @pytest.mark.parametrize("source", CHECKPOINT_PROGRAMS)
 def test_logical_line_checkpoints_preserve_indentation_and_continuations(source):
-    assert assert_prefixes(source, source) == assert_prefixes(source, [source])
+    assert assert_partition(source, source) == assert_partition(source, [source])
     for split in range(len(source) + 1):
-        assert assert_prefixes(source, [source[:split], source[split:]]) == assert_prefixes(source, [source])
+        assert assert_partition(source, [source[:split], source[split:]]) == assert_partition(source, [source])
 
 
 @pytest.mark.parametrize("module", ["abc", "keyword", "stat"])
@@ -104,7 +77,7 @@ def test_standard_library_sources_preserve_ast_under_random_partitions(module):
         size = rng.randint(1, 512)
         chunks.append(source[offset : offset + size])
         offset += size
-    assert assert_prefixes(source, chunks) == assert_prefixes(source, [source])
+    assert assert_partition(source, chunks) == assert_partition(source, [source])
 
 
 def test_parser_persists_future_grammar_across_units():
@@ -129,10 +102,10 @@ def test_future_grammar_is_independent_of_transport_partition():
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="type statements require Python 3.12")
 def test_type_alias_and_generic_definition_follow_host_grammar():
     source = "type Vector[T] = list[T]\ndef first[T](items: Vector[T]) -> T:\n    return items[0]\nfirst([1])\n"
-    assert assert_prefixes(source, source) == assert_prefixes(source, [source])
+    assert assert_partition(source, source) == assert_partition(source, [source])
 
 
 @pytest.mark.skipif(sys.version_info < (3, 14), reason="template strings require Python 3.14")
 def test_template_strings_do_not_expose_nested_newlines():
     source = 'value = t"""Hello {\n    name\n}!"""\nnext(value)\n'
-    assert assert_prefixes(source, source) == assert_prefixes(source, [source])
+    assert assert_partition(source, source) == assert_partition(source, [source])

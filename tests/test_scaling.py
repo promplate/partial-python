@@ -1,27 +1,13 @@
 """Count parser work rather than asserting machine-dependent wall-clock timings."""
 
 import pytest
+from _assertions import count_work
 
-import partial_python.parser as parser_module
 from partial_python import Parser
 
 
 def measure_work(monkeypatch, source, chunk_size):
-    counts = {"normalized": 0, "parsed": 0}
-    original_normalize = parser_module._normalize
-    original_tree = parser_module._tree
-
-    def normalize(text):
-        counts["normalized"] += len(text)
-        return original_normalize(text)
-
-    def tree(text, *args, **kwargs):
-        counts["parsed"] += len(text)
-        return original_tree(text, *args, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(parser_module, "_normalize", normalize)
-        patch.setattr(parser_module, "_tree", tree)
+    with count_work(monkeypatch) as counts:
         parser = Parser()
         statements = []
         for start in range(0, len(source), chunk_size):
@@ -43,7 +29,7 @@ def test_growing_suite_scanning_scales_with_source_length(monkeypatch, chunk_siz
     large_work = measure_work(monkeypatch, large, chunk_size)
     # Four times as many bounded logical lines must not entail quadratic rescans,
     # including when the entire source arrives in one transport chunk.
-    for operation in small_work:
+    for operation in ("normalized", "parsed"):
         assert large_work[operation] <= small_work[operation] * 5
     assert large_work["normalized"] < len(large) * 30
     assert large_work["parsed"] < len(large) * 5
