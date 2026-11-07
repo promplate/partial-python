@@ -77,8 +77,4 @@ The executor rejects overlapping or recursive writes instead of silently reorder
 
 This is language-boundary safety, not a sandbox, rollback mechanism, or distributed exactly-once protocol. An external worker can enforce isolation and resource limits independently of these parsing rules.
 
-## Validation scope
-
-The parser tests exercise every two-chunk split and character-by-character delivery for representative Python constructs. They compare exact source slices, offsets, logical grouping, and flattened AST statements against whole-source parsing. Separate tests check that comments, partial continuation keywords, synthetic EOF tokens, and unfinished decorators never cause early execution.
-
-Constructed programs here are syntax and runtime unit tests. They are not model evaluations or evidence of improvement on real CodeAct sessions. Such evaluation requires complete real sessions and their actual tool results.
+See the [validation guide](validation.md) for conformance checks and their scope.

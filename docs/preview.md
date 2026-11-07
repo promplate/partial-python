@@ -64,4 +64,4 @@ F-strings and template strings have nested grammars and are never repaired. A co
 
 See [the partial family](prior-art.md#the-partial-family) for pinned references and the distinction between provisional display and committed effects.
 
-Tests cover every character prefix of representative Unicode, CRLF, nested-suite, decorator, async and f-string sources under every flag combination, plus explicit repair/hold cases. These are parser correctness fixtures, not model evaluation evidence.
+Tests cover every character prefix of representative Unicode, CRLF, nested-suite, decorator, async and f-string sources under every flag combination, plus explicit repair/hold cases.

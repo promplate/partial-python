@@ -1,7 +1,5 @@
 # Design decisions
 
-Status: validated working prototype. The API is experimental, unpublished and may change.
-
 ## Contract before implementation
 
 The product has three layers: a syntactic commit frontier, an effectful executor, and a provisional display completer. Keeping them separate is essential: a parser accepting a prefix at EOF does not prove future append-only text cannot extend it, and a renderable repaired string must never authorize side effects.
@@ -14,18 +12,9 @@ The execution host's `tokenize` supplies lexical candidate boundaries; its compi
 
 `tokenize` is not trusted as a recovery oracle: it is specified for valid Python and synthesizes EOF tokens. We ignore synthetic line endings, retain invalid/incomplete tails, and validate candidate source with CPython. Adversarial source prefixes and a Python version matrix are part of the implementation contract.
 
-## Public layers
-
-- `Parser.feed` / `finish` produce original `CodeUnit` slices; `pending` retains the uncommitted suffix.
-- `Executor.feed` / `finish` are explicit writes for protocols with separate completion statuses.
-- `Executor.stream` consumes an async iterator with per-unit backpressure and persistent diagnostics. `incremental_exec` constructs an executor and returns that iterator directly.
-- `complete` returns `Completion(prefix, suffix, withheld, committed, diagnostic)`. The default is a stable prefix; nonzero `Allow` flags enable provisional display. Only the display completer adds characters.
-
-Names describe the actual unit of work: one `CodeUnit` can contain a semicolon chain or a whole compound statement. `Execution.unit` identifies that slice; events denote successful completion, not atomic effects.
-
 ## Boundary rules
 
-Simple statements need a real logical NEWLINE or declared EOF. Entire compound statements wait for a distinct top-level successor or EOF, including one-line suites. Optional continuation clauses remain attached. Blank lines and comments never close a suite. Decorators travel with their definition.
+The [semantic contract](semantics.md#boundaries) defines when an original-source slice is stable. No execution option may relax that boundary; configurable completion belongs to [display preview](preview.md).
 
 A partial name such as `e` or exact `else` at temporary EOF is still ambiguous. A name that cannot grow into a continuation clause, such as `next`, already proves a successor. Known operator, number and string tokens establish the same boundary, even when the literal itself may still grow. Actual f/t-string start tokens and host-proven opaque string openers also establish successors before their contents finish. Unresolved lexical errors remain conservative. A successor keeps its entire logical-line prefix, including formfeeds and explicit joins, so original columns and physical lines remain intact. For a prefix spanning explicit joins, a native AST probe with a placeholder `pass` verifies that it is truly at module indentation; Python 3.11’s pure-Python tokenizer can disagree with the compiler here. The placeholder never enters a `CodeUnit` or execution.
 
@@ -53,6 +42,6 @@ Future flags persist across units with stream-prologue checks. Only the initial 
 
 ## Validation and remaining scope
 
-The [validation record](validation.md) covers the Python 3.11–3.15 matrix, generated grammar checks, exact AST-position conformance on real source, isolated package installs, and end-to-end host examples. The [review record](reviews.md) distinguishes completed external `/simplify` and `/code-review` rounds from failed attempts and records accepted and rejected findings.
+The [validation guide](validation.md) covers interpreter versions, generated grammar, exact AST-position conformance on real source, package installs, and host examples. Shared mutable AST caches would add ownership and mutation rules; optimize this path only when measurements justify that cost.
 
-The core deliberately leaves source-size limits, hard execution deadlines and process isolation to its host. Large multiline inputs and frequent unescaped quote candidates remain performance limits, not reasons to weaken the commit boundary. Real model evaluation or CodeAct product integration requires complete real session context; current fixtures, TCP protocol checks and source corpora are engineering verification only.
+The core deliberately leaves source-size limits, hard execution deadlines and process isolation to its host. Large multiline inputs and frequent unescaped quote candidates remain performance limits, not reasons to weaken the commit boundary.

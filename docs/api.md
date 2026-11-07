@@ -1,7 +1,5 @@
 # API and transport integration
 
-The transport examples use deterministic local fixtures, not model evaluations. No vendor adapter is included.
-
 ## Public entry points
 
 Each entry point has a separate contract:
@@ -19,6 +17,14 @@ Each entry point has a separate contract:
 
 The execution rule should not gain an eager mode that closes an unfinished loop or call. Configuration belongs to preview detail, caller namespace, diagnostics, host resource limits, and transport ownership. Waiting longer is safe; inventing an execution boundary is not a tuning option.
 
+## Namespace and results
+
+`Executor(namespace=None, *, filename="<partial-python>")` uses a supplied dictionary as-is. Without one, it creates a namespace with `__name__ = "__main__"`. Include that binding explicitly when a supplied namespace should behave as a script. No module is registered in `sys.modules`.
+
+Each `Execution` records its index, original `unit`, and monotonic `started_at` / `completed_at` times. It does not capture expression results or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`.
+
+Reuse the namespace with a new executor for another logical model response. Bindings persist; compiler flags do not. Each new stream must repeat its required future imports. See [compilation-unit semantics](semantics.md#execution-is-a-sequence-of-compilation-units).
+
 ## Lifecycle and diagnostics
 
 `finish()` declares authoritative successful source completion. It can release a final call without a newline or an entire compound suite. It is not a generic cleanup method. `abort()` abandons the stream while preserving evidence; `finally: await finish()` is therefore the wrong integration pattern.
@@ -30,10 +36,11 @@ The current diagnostic model is useful when its distinctions are explicit:
 | `events` | Units that completed successfully; immutable snapshots. |
 | `failed_unit` | The attempted unit whose completion was not acknowledged; partial or complete effects may exist. A parser EOF error has no fabricated attempted unit. |
 | `unexecuted` | Accepted, sealed units that have not started. They are retained for diagnostics, not automatic retry. |
+| `parser` | Immutable snapshot of `pending`, `committed`, and `closed`; not an input interface. |
 | `parser.pending` | Source still awaiting a grammatical boundary. |
 | `parser.committed` | Number of source characters accepted by the parser; this is not an execution watermark. |
 | `error` | The recorded terminal failure; rejected later calls must not replace it. Native generator control exceptions may be wrapped when propagated; see [exception semantics](semantics.md#failures-cancellation-and-effects). |
-| `state` | Open, successfully finished, failed, or explicitly aborted. |
+| `state` | `"open"`, `"finished"`, `"failed"`, or `"aborted"`. |
 
 Successful events plus the failed range, queued ranges and pending tail preserve the accepted source after a mid-chunk failure. Syntax errors retain the original filename and line numbers. Cooperative cancellation is terminal, including when a producer or statement catches `CancelledError` without clearing the new cancellation request. This is not a hard deadline for code that loops forever or deliberately removes cancellation state.
 
@@ -67,8 +74,6 @@ except Exception:
 
 Exceptions from `display_completed()` belong to the caller; `executor.error` records source, execution and cleanup failures inside the executor. `aclosing` also closes the stream when the consumer raises or stops early.
 
-Completed events plus raised exceptions are enough for the first API. Host UIs can report a logical stream as running while awaiting a completion; a future started-event API should follow a real integration need, with a clear distinction between compilation, dispatch and completion. Do not emit a failed event and then also raise the same failure without a reason.
-
 ## Minimal transport adapter
 
 `examples/transport.py` demonstrates two NDJSON records over a single loopback TCP connection:
@@ -92,16 +97,29 @@ The parser accepts Python characters, not a JSON envelope or markdown. A raw cus
 
 The example's JSON is record framing: each record is decoded completely before its Python string is emitted. It is not an implementation of partial JSON argument decoding.
 
+## Task ownership
+
+The standalone executor does not own tasks created by user code. `asyncio.create_task()` must survive parser flushes so a later statement can await the resulting task. Closing or failing a stream does not imply canceling every task in the process: that would also kill unrelated application work. Applications needing scoped cleanup should supply their own task registry or task group around a logical model call. Hard timeouts for CPU-bound code require a process boundary; canceling an asyncio task only works when execution cooperates.
+
+Units execute in the calling task's context, with no hidden task per unit. A single consuming task therefore preserves `ContextVar` changes and tokens across units, which matters for output routing. A shared globals dictionary does not transfer task-local context between separate calls to `asyncio.create_task(anext(events))`. Consume the logical stream in one task and place `asyncio.timeout(...)` around that scope when its context must persist; a source iterator's own context-manager tokens may also require that lifetime.
+
+For notebook integration, retain a single logical cell's output/history lifecycle while executing its sealed statements. Calling `run_cell_async()` separately for each statement changes `_`, `Out[n]`, final-expression display, transform semantics, and task cleanup. A raw-Python execution backend is the initial default; IPython `%`, `!`, and `%%` forms need their own cell-level contract.
+
 ## Receive/execution concurrency
 
 The default is pull-based: obtaining the next completed event permits execution to continue and eventually requests more source. It naturally applies backpressure and has no hidden producer task. The TCP reader and operating system may buffer incoming bytes; that does not mean Python execution is concurrent or reordered.
 
-For a host that needs reception while an awaitable tool is running, use an explicit bounded producer queue with separate successful-completion, producer-failure and cancellation signals. Queue exhaustion alone is not EOF. If failure is observed while a tool is running, the host must decide whether to let that already-started unit finish or cancel it; either choice must prevent later queued units from starting. Preserve FIFO order, do not automatically retry side effects, and close both source and worker lifetimes. A bounded queue is an adapter concern until a real integration demonstrates the right public abstraction.
+For a host that needs reception while an awaitable tool is running, use an explicit bounded producer queue with separate successful-completion, producer-failure and cancellation signals. Queue exhaustion alone is not EOF. If failure is observed while a tool is running, the host must decide whether to let that already-started unit finish or cancel it; either choice must prevent later queued units from starting. Preserve FIFO order, do not automatically retry side effects, and close both source and owning task lifetimes. A bounded queue is an adapter concern until a real integration demonstrates the right public abstraction.
 
-## Evidence from the prototype
+## Host examples
 
-The loopback server sends the first closed await statement and waits for the tool itself to signal execution before it transmits the remainder. This proves early execution without relying on sleep durations. It then fragments the loop's record into three-byte writes. Only a completed terminal status releases the final loop; truncated, canceled, and disconnected cases retain only the earlier side effect.
+Run an example from a checkout with `uv run examples/<name>.py`. They are not installed as public package modules; a checkout can import them as `examples.transport`, `examples.overlap`, and `examples.tracebacks`.
 
-`tests/test_transport.py` also checks final-source mismatch, no-newline final calls, bare EOF, partial records, malformed frames, Unicode/escape preservation across byte fragments, record/source limits, empty completion, and early consumer close. Closing the event iterator closes the socket and leaves the rest of a multi-statement chunk unexecuted.
+| Example | Host responsibility |
+| --- | --- |
+| [streaming_tools](../examples/streaming_tools.py) | Show early execution, whole-compound holdback, ordered awaits, and explicit EOF. |
+| [transport](../examples/transport.py) | Validate completion over a real loopback TCP connection with fragmented records. |
+| [overlap](../examples/overlap.py) | Receive through a bounded queue while a tool awaits; propagate source failure and cancellation. |
+| [tracebacks](../examples/tracebacks.py) | Write original source before execution and retain the file while generated functions or tracebacks remain in use. |
 
-Run the prototype with `uv run examples/transport.py` and its tests with `uv run --group dev pytest tests/test_transport.py`. No model endpoint, credential, or fabricated model-quality result is involved.
+The traceback recipe writes UTF-8 without newline translation; it requires an absent or UTF-8 source encoding cookie, because traceback readers honor cookies even though `compile(str)` does not.
