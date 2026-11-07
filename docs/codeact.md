@@ -1,6 +1,6 @@
-# CodeAct integration research
+# CodeAct integration
 
-This note records current local source inspected on 2026-11-02. The existing Codex checkout is a dirty `py-codeact-poc` development branch; none of those files were changed for this project. The examples and tests here are deterministic protocol fixtures, not real model evaluations or evidence of improved online behavior.
+The examples and tests here are deterministic protocol fixtures, not real model evaluations or evidence of improved online behavior.
 
 ## Recommended execution lifecycle
 
@@ -25,39 +25,7 @@ For notebook integration, retain a single logical cell's output/history lifecycl
 
 ## Compile-unit differences
 
-The contract is sequential interactive compilation units sharing globals, not equivalence to compiling an unknown entire module. Whole-file syntax errors, directives, annotations, scheduling, introspection, and compilation-unit metadata can distinguish the two. No syntax mechanism can roll back an already performed external side effect.
-
-- Carry explicit `__future__` flags forward; reject late future imports after the stream prologue.
-- Only the first source string can become the module docstring. Subsequent standalone strings must not reset `__doc__` just because they start another code object.
-- Reject module-scope `global` declarations; a later directive can otherwise affect earlier compilation. Declarations inside a function stay within that complete function's scope.
-- On Python 3.14+, reject module-scope annotated assignments unless the source explicitly enables `from __future__ import annotations`. This also includes annotations nested in module-level `if`, `for`, or `try` suites; complete function and class scopes are separate.
-
-The annotation policy comes from a direct Python 3.14.10 experiment. Executing `x: int = 1` and `y: str = "s"` as two code objects replaces namespace `__annotate__`, whose result then contains only `y`; compiling both in one module returns both annotations. With the explicit future flag, separate units merge the string annotations in `__annotations__`. Silently injecting that flag would change the caller's annotation semantics, so the executor requires the caller's explicit choice instead. This policy avoids lost annotations; it does not claim whole-module reflection equivalence.
-
-## Exact local reference map
-
-All paths below are absolute. Line ranges refer to the inspected files, not a released package.
-
-| Concern | Source and lines | Finding |
-| --- | --- | --- |
-| Persistent IPython namespace | `/Users/muspi-merol/Desktop/macaron/dsh-py-codeact/py/kernel.py:758-795` | Each shell has an `InteractiveShell(user_ns=...)`; shells share a process, imports and event loop. ContextVar routing isolates output and display hooks. |
-| Display/history | `/Users/muspi-merol/Desktop/macaron/dsh-py-codeact/py/kernel.py:812-816` | `_` and `Out[n]` persist; final-expression results are captured without a duplicate echo. |
-| Await/error/cancellation | `/Users/muspi-merol/Desktop/macaron/dsh-py-codeact/py/kernel.py:868-904` | `transform_cell` and `run_cell_async(store_history=True)` distinguish preprocessing and execution errors. IPython catches cancellation and reports it through `ExecutionResult`. |
-| Tool futures | `/Users/muspi-merol/Desktop/macaron/dsh-py-codeact/py/kernel.py:257-299` | A request owns one Future; pending unsent work is canceled, and late/duplicate results are ignored. Already-dispatched effects cannot be recalled. |
-| Busy guard and tool rebinding | `/Users/muspi-merol/Desktop/macaron/dsh-py-codeact/py/kernel.py:1027-1092` | Reject an overlapping cell before changing the tool catalog. CPU-bound code blocks the in-band interrupt handler. |
-| Host interrupt escalation | `/Users/muspi-merol/Desktop/macaron/dsh-py-codeact/lib/kernel.js:359-393` | Check abort again after startup, then in-band interrupt, then hard process kill after a grace period. |
-| Codex per-cell task cleanup | `/Users/muspi-merol/Desktop/codex/scripts/py-codeact/host.py:68-100` | Every completed cell cancels detached tasks; cleanup exceeding two seconds exits the worker. This is incompatible with using one existing host cell per streamed statement. |
-| Kernel subprocess lifecycle | `/Users/muspi-merol/Desktop/codex/scripts/py-codeact/host.py:172-220,226-280` | One subprocess per Codex session; finish closes tool dispatch before notifying observers. Termination kills the process group and loses variables. |
-| Existing execute protocol | `/Users/muspi-merol/Desktop/codex/scripts/py-codeact/host.py:370-420` | `session/execute` receives full source and admits one active cell. Yield/wait observes execution; it is not source streaming. |
-| Rust execution request | `/Users/muspi-merol/Desktop/codex/codex-rs/core/src/tools/code_mode/execute_handler.rs:38-99,128-163` | Full source enters `ExecuteRequest`; dispatch and cell tracing assume one complete logical tool call. |
-| Custom tool text deltas | `/Users/muspi-merol/Desktop/codex/codex-rs/codex-api/src/sse/responses.rs:399-407` | Custom tool input deltas already become `ToolCallInputDelta`. |
-| JSON arguments deltas | `/Users/muspi-merol/Desktop/codex/codex-rs/codex-api/src/sse/responses.rs:538-549` | Function-call arguments deltas are currently ignored. Raw custom Python input is the smaller initial integration. |
-| Delta consumption | `/Users/muspi-merol/Desktop/codex/codex-rs/core/src/session/turn.rs:3179-3196,3411-3427` | Current deltas feed UI diff consumers, not an executor. |
-| Dispatch authorization | `/Users/muspi-merol/Desktop/codex/codex-rs/core/src/session/turn.rs:3011-3023,3083-3094,3129` | Serving assessment and invocation dispatch occur at `OutputItemDone`. Production streaming integration must preserve the authorization path while introducing per-statement dispatch; the library prototype does not bypass it. |
-| PoC environment restrictions | `/Users/muspi-merol/Desktop/codex/codex-rs/core/src/tools/code_mode/python.rs:79-106` | Current Python backend accepts only its local full-access environment. |
-| Existing source-stream shape | `/Users/muspi-merol/Desktop/promplate/demo/src/utils/openai_api.py:23-30` | `AsyncIterable[str]` is already the text-delta interface used by the demo's SSE layer. |
-
-These are reference ranges for navigation, not a claim that those integrations have been implemented.
+Execution uses sequential compilation units sharing globals. See the [semantic contract](semantics.md#execution-is-a-sequence-of-compilation-units) for future-import, docstring, global and annotation policies, and observable differences from whole-module compilation.
 
 ## Parser alternatives
 

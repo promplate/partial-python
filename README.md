@@ -128,4 +128,4 @@ uv run python examples/worker.py  # POSIX host prototype
 uv build
 ```
 
-Tests include every-character and random partition checks, AST-prefix invariants, real stdlib source, cancellation/transport failures, and deterministic work-count regressions. Fixtures and demos are engineering verification, not model evaluation evidence. [Design](docs/design.md) · [CodeAct integration research](docs/codeact.md) · [Related implementations](docs/prior-art.md).
+Tests include every-character and random partition checks, AST-prefix invariants, real stdlib source, cancellation/transport failures, and deterministic work-count regressions. Fixtures and demos are engineering verification, not model evaluation evidence. [API and transport](docs/api.md) · [Design](docs/design.md) · [CodeAct integration](docs/codeact.md) · [Related implementations](docs/prior-art.md).

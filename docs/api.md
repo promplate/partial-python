@@ -1,16 +1,17 @@
-# API review and transport prototype
+# API and transport integration
 
-Status: design review with a validated example-only protocol. The core now exposes the reviewed `Executor.stream()` lifecycle; no vendor adapter is included. The transport tests are deterministic engineering fixtures, not model evaluations.
+The transport examples use deterministic local fixtures, not model evaluations. No vendor adapter is included.
 
-## Recommended public shape
+## Public entry points
 
-Keep the small entry points below with separate contracts:
+Each entry point has a separate contract:
 
 | Entry point | Input | Output | Purpose |
 | --- | --- | --- | --- |
 | `complete(source, allow=...)` | Current full source snapshot | `Completion` with original prefix, synthetic suffix, withheld source and committed offset | Display an explicitly provisional preview. Never feed its generated suffix to execution. |
 | `Parser.feed(delta)` / `finish()` | Append-only raw Python deltas / explicit EOF | Immutable original-source `CodeUnit` ranges | Integrate with another execution runtime. |
-| `Executor.feed(delta)` / `finish()` / `abort()` | Same source protocol | Completed `Execution` events and inspectable state | Own provider status handling explicitly. |
+| `Executor.feed(delta)` / `finish()` | Append-only raw Python deltas / explicit EOF | Tuple of completed `Execution` events | Own provider status handling explicitly. |
+| `Executor.abort()` | No arguments; executor must be idle | `None`; retains diagnostic state | Abandon pending source without executing it. |
 | `Executor.stream(deltas)` | A validated async text iterator | Completed events with retained executor diagnostics | Stateful pull-based consumption. |
 | `incremental_exec(deltas)` | The same iterator | The same events and exceptions | Convenience wrapper returning an executor stream directly. |
 
@@ -40,7 +41,7 @@ Catching `CancelledError` can let a unit run its remaining body, assign its resu
 
 Source ranges use half-open character offsets and one-based cursor lines. A final newline advances `end_line`; without it, `end_line` stays on the final physical line. EOF may emit a trivia-only `CodeUnit`, so event counts are neither AST statement counts nor tool-call counts.
 
-### Stateful streaming is now implemented
+### Stateful streaming
 
 `Executor.stream(chunks) -> AsyncGenerator[Execution, None]` gives streaming callers access to the executor's diagnostics after failure. `incremental_exec()` is a plain convenience function returning that stream directly, so it does not add another async-generator cleanup boundary or duplicate the execution lifecycle.
 
@@ -93,7 +94,7 @@ The example's JSON is record framing: each record is decoded completely before i
 
 ## Receive/execution concurrency
 
-The default should remain pull-based: obtaining the next completed event permits execution to continue and eventually requests more source. It naturally applies backpressure and has no hidden producer task. The TCP reader and operating system may buffer incoming bytes; that does not mean Python execution is concurrent or reordered.
+The default is pull-based: obtaining the next completed event permits execution to continue and eventually requests more source. It naturally applies backpressure and has no hidden producer task. The TCP reader and operating system may buffer incoming bytes; that does not mean Python execution is concurrent or reordered.
 
 For a host that needs reception while an awaitable tool is running, use an explicit bounded producer queue with separate successful-completion, producer-failure and cancellation signals. Queue exhaustion alone is not EOF. If failure is observed while a tool is running, the host must decide whether to let that already-started unit finish or cancel it; either choice must prevent later queued units from starting. Preserve FIFO order, do not automatically retry side effects, and close both source and worker lifetimes. A bounded queue is an adapter concern until a real integration demonstrates the right public abstraction.
 
