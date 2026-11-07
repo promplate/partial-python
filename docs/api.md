@@ -118,6 +118,7 @@ Run an example from a checkout with `uv run examples/<name>.py`. They are not in
 | Example | Host responsibility |
 | --- | --- |
 | [streaming_tools](../examples/streaming_tools.py) | Show early execution, whole-compound holdback, ordered awaits, and explicit EOF. |
+| [compare](../examples/compare.py) | Compare live incremental and whole-module execution on the same simulated source stream: `calls`, `loop`, `syntax`, or `truncated`. |
 | [transport](../examples/transport.py) | Validate completion over a real loopback TCP connection with fragmented records. |
 | [overlap](../examples/overlap.py) | Receive through a bounded queue while a tool awaits; propagate source failure and cancellation. |
 | [tracebacks](../examples/tracebacks.py) | Write original source before execution and retain the file while generated functions or tracebacks remain in use. |
