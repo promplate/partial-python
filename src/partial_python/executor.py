@@ -196,10 +196,9 @@ class Executor:
             # the owning task still carries an outstanding cancellation request.
             if task is not None and task.cancelling() > cancellations:
                 raise asyncio.CancelledError
-        except BaseException as error:
-            self._error = error
+        except BaseException:
+            # The owning operation records terminal state; this layer identifies the attempted unit.
             self._failed_unit = statement
-            self._state = "failed"
             raise
         event = Execution(len(self._events), statement, started, monotonic())
         self._events.append(event)

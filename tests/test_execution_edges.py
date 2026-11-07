@@ -1,4 +1,4 @@
-"""Adversarial execution protocol fixtures, not model-evaluation evidence."""
+"""Adversarial execution and terminal-state behavior."""
 
 import asyncio
 

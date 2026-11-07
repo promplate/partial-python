@@ -1,4 +1,4 @@
-"""Adversarial display cases; these fixtures are not model evaluation evidence."""
+"""Adversarial display completions and source preservation."""
 
 import ast
 import sys

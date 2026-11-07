@@ -1,4 +1,4 @@
-"""Deterministic execution fixtures; these are not model evaluation or replay evidence."""
+"""Ordered execution of stable source units."""
 
 import asyncio
 import sys

@@ -1,4 +1,4 @@
-"""Generated parser inputs exercise source preservation, not model behavior."""
+"""Generated source-preservation checks across display policies."""
 
 import ast
 

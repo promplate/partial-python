@@ -1,4 +1,4 @@
-"""Compiler-context and source-location fixtures; not model evaluation evidence."""
+"""Compiler context and original source locations."""
 
 import pickle
 import sys
@@ -11,7 +11,6 @@ from partial_python import Executor, UnsupportedSyntaxError
 
 def execute_native(source, namespace=None):
     namespace = namespace if namespace is not None else {}
-    # These constructed fixtures compare the interpreter's semantics, not model quality.
     exec(compile(source, "native_context.py", "exec", dont_inherit=True), namespace)  # noqa: S102
     return namespace
 

@@ -1,4 +1,4 @@
-"""Example-only NDJSON transport for partial-python; no model evaluation is performed.
+"""NDJSON transport with explicit source completion.
 
 Run: uv run examples/transport.py
 A delta record carries raw Python source. Only a completed done record whose

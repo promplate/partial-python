@@ -1,23 +1,17 @@
-"""Deterministic transport fixtures; no model calls, replays, or quality claims."""
+"""Transport completion, framing, and socket cleanup."""
 
 import asyncio
-import runpy
-from pathlib import Path
 
 import pytest
 
+from examples import overlap
+from examples import transport as example
+from examples.transport import SourceAborted, SourceProtocolError, execute_connection, record_bytes, source_deltas
 from partial_python import incremental_exec
-
-example = runpy.run_path(str(Path(__file__).parents[1] / "examples" / "transport.py"))
-source_deltas = example["source_deltas"]
-record_bytes = example["record_bytes"]
-execute_connection = example["execute_connection"]
-SourceProtocolError = example["SourceProtocolError"]
-SourceAborted = example["SourceAborted"]
 
 
 def reader_for(*records):
-    reader = asyncio.StreamReader(limit=example["MAX_RECORD_BYTES"])
+    reader = asyncio.StreamReader(limit=example.MAX_RECORD_BYTES)
     for record in records:
         reader.feed_data(record if isinstance(record, bytes) else record_bytes(record))
     reader.feed_eof()
@@ -26,7 +20,7 @@ def reader_for(*records):
 
 @pytest.mark.parametrize("status", ["completed", "truncated", "cancelled", "disconnected"])
 async def test_loopback_starts_tool_before_final_source_and_respects_status(status):
-    calls = await asyncio.wait_for(example["run_scenario"](status), 5)
+    calls = await asyncio.wait_for(example.run_scenario(status), 5)
     assert calls == (["early", 1, 2] if status == "completed" else ["early"])
 
 
@@ -91,7 +85,7 @@ async def test_partial_wire_record_does_not_become_normal_eof():
 async def test_unicode_and_escaped_python_text_survive_fragmented_bytes():
     source = 'message = "你好\\nworld"\n'
     wire = record_bytes({"type": "delta", "text": source}) + record_bytes({"type": "done", "status": "completed", "source": source})
-    reader = asyncio.StreamReader(limit=example["MAX_RECORD_BYTES"])
+    reader = asyncio.StreamReader(limit=example.MAX_RECORD_BYTES)
 
     async def produce():
         for value in wire:
@@ -118,7 +112,7 @@ async def test_frame_reader_limit_is_reported_as_protocol_error():
 
 
 async def test_source_size_limit_applies_before_yielding_new_text():
-    reader = reader_for({"type": "delta", "text": "x" * (example["MAX_SOURCE_CHARS"] + 1)})
+    reader = reader_for({"type": "delta", "text": "x" * (example.MAX_SOURCE_CHARS + 1)})
     with pytest.raises(SourceProtocolError, match="size limit"):
         async for _ in source_deltas(reader):
             pytest.fail("oversized source was emitted")
@@ -252,8 +246,7 @@ async def test_consumer_close_reports_socket_failure_without_executing_later_uni
 
 @pytest.mark.parametrize("scenario", ["transport", "overlap"])
 async def test_server_close_failure_reaches_scenario_instead_of_timing_out(monkeypatch, scenario):
-    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "examples"))
-    run_scenario = example["run_scenario"] if scenario == "transport" else runpy.run_path(str(Path(__file__).parents[1] / "examples" / "overlap.py"))["run_scenario"]
+    run_scenario = example.run_scenario if scenario == "transport" else overlap.run_scenario
     start_server = asyncio.start_server
     closing = OSError("server socket close failed")
 

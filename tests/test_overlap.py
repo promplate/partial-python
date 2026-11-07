@@ -1,22 +1,17 @@
-"""Engineering fixtures for owned, bounded reception; these are not model evaluations."""
+"""Bounded reception, task ownership, and cancellation."""
 
 import asyncio
-import runpy
-from pathlib import Path
 
 import pytest
 
+from examples import overlap as example
+from examples.overlap import execute_buffered
 from partial_python import Executor
-
-EXAMPLES = Path(__file__).parents[1] / "examples"
-example = runpy.run_path(str(EXAMPLES / "overlap.py"))
-execute_buffered = example["execute_buffered"]
 
 
 @pytest.mark.parametrize("status", ["completed", "truncated", "cancelled", "disconnected"])
-async def test_loopback_receives_later_source_while_first_tool_awaits(status, monkeypatch):
-    monkeypatch.syspath_prepend(str(EXAMPLES))
-    await asyncio.wait_for(example["run_scenario"](status), 5)
+async def test_loopback_receives_later_source_while_first_tool_awaits(status):
+    await asyncio.wait_for(example.run_scenario(status), 5)
 
 
 async def test_bounded_reception_pauses_producer_and_preserves_execution_order():

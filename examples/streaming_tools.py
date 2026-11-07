@@ -1,4 +1,4 @@
-"""A deterministic streaming protocol demo, not a real model evaluation.
+"""Early execution, ordered awaits, and whole-compound holdback.
 
 Run with: uv run examples/streaming_tools.py
 Replace chunks() with an async iterator over decoded model text deltas. That
@@ -29,8 +29,8 @@ async def main():
         await asyncio.sleep(0.03)
 
     async def bar(value):
-        # The loop belongs to one commit; the real successor seals its entire body.
-        assert "    await bar(value)\nawait " in received
+        # The first `a` already excludes continuation clauses and seals the loop.
+        assert "    await bar(value)\na" in received
         calls.append(("bar", value))
         log(f"bar({value}) runs after the entire loop is sealed")
         await asyncio.sleep(0.03)

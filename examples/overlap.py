@@ -1,7 +1,6 @@
 """Example-only bounded reception while sequential Python execution is awaiting.
 
 Run: uv run examples/overlap.py
-This is a deterministic loopback protocol fixture, not a model evaluation.
 The core stays pull-based; this host explicitly owns a producer task and a
 bounded queue. TaskGroup preserves observed producer failures while cancelling
 execution. A full queue also pauses reading later provider status records.
@@ -59,16 +58,13 @@ async def execute_buffered(chunks: AsyncIterable[str], executor: Executor, *, ca
                 return
             yield item
 
-    async def consume():
-        async for event in executor.stream(queued_source()):
-            events.append(event)
-
     # An observed producer failure cancels the running unit. Consumption
     # stays in the owning task so a cancelled tool also closes reception.
     async with asyncio.TaskGroup() as tasks:
         tasks.create_task(produce()).add_done_callback(producer_done)
         try:
-            await consume()
+            async for event in executor.stream(queued_source()):
+                events.append(event)
         finally:
             consuming = False
     return tuple(events)

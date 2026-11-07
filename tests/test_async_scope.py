@@ -1,4 +1,4 @@
-"""CodeAct-style async scope regressions; fixed language fixtures, not model evaluations."""
+"""Task scopes and execution acknowledgement across streamed units."""
 
 import asyncio
 import sys

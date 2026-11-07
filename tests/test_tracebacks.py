@@ -1,19 +1,13 @@
-"""Engineering fixtures for source-file lifetime, not model evaluation."""
+"""Source-file lifetime and original traceback locations."""
 
 import asyncio
-import importlib.util
 import traceback
-from pathlib import Path
 
 import pytest
 
+from examples import tracebacks as example
+from examples.tracebacks import record_and_execute
 from partial_python import Executor
-
-spec = importlib.util.spec_from_file_location("tracebacks_example", Path(__file__).parents[1] / "examples" / "tracebacks.py")
-assert spec is not None and spec.loader is not None
-example = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(example)
-record_and_execute = example.record_and_execute
 
 
 async def test_later_function_keeps_real_source_after_executor_and_writer_finish():
