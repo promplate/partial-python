@@ -119,7 +119,7 @@ This is in-process Python, not a sandbox or transaction. Awaited operations coop
 ```sh
 uv sync
 uv run pytest
-uv run mypy
+uv run basedpyright
 uv run ruff check .
 uv run python examples/streaming_tools.py
 uv run python examples/transport.py

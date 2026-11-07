@@ -6,7 +6,7 @@ These checks verify parser, execution and host-protocol behavior. Constructed pr
 
 ```sh
 uv run pytest -q
-uv run mypy
+uv run basedpyright
 uv run ruff check .
 uv run ruff format --check .
 uv run --isolated --python 3.11 pytest -q

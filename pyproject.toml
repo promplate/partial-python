@@ -17,7 +17,7 @@ dev = [
     "hypothesis>=6",
     "ruff~=0.17.3",
     "build>=1",
-    "mypy>=2.4.1",
+    "basedpyright>=1.40.2",
 ]
 
 [tool.pytest.ini_options]
@@ -44,7 +44,8 @@ extend-select = [
     "RSE102",
 ]
 
-[tool.mypy]
-strict = true
-python_version = "3.11"
-files = ["src/partial_python"]
+[tool.pyright]
+include = ["src/partial_python"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+reportUnnecessaryTypeIgnoreComment = "error"
