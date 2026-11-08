@@ -28,10 +28,14 @@ jobs:
       - run: uv run --locked basedpyright
       - run: uv run --locked basedpyright --verifytypes partial_python --ignoreexternal
       - run: uv build --no-sources
+      - name: Check minimum build backend
+        run: |
+          echo 'uv_build==0.7.19' > "$RUNNER_TEMP/build-constraints.txt"
+          uv build --no-sources --force-pep517 --build-constraints "$RUNNER_TEMP/build-constraints.txt" --out-dir "$RUNNER_TEMP/dist-minimum"
       - name: Test installed distributions
         run: |
           for version in 3.11 3.15; do
-            for package in dist/*; do
+            for package in dist/* "$RUNNER_TEMP"/dist-minimum/*; do
               uv run --isolated --no-project --python "$version" --with "$package" python -I -c 'from importlib.metadata import requires; from importlib.resources import files; assert not requires("partial-python"); assert files("partial_python").joinpath("py.typed").is_file()'
               uv run --isolated --no-project --python "$version" --with "$package" python -I examples/streaming_tools.py
             done
