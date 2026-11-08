@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.15"
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "${GITHUB_REF_NAME#v}" = "$(uv version --short)"
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked basedpyright
+      - run: uv run --locked basedpyright --verifytypes partial_python --ignoreexternal
+      - run: uv build --no-sources
+      - name: Test installed distributions
+        run: |
+          for version in 3.11 3.15; do
+            for package in dist/*; do
+              uv run --isolated --no-project --python "$version" --with "$package" python -I -c 'from importlib.metadata import requires; from importlib.resources import files; assert not requires("partial-python"); assert files("partial_python").joinpath("py.typed").is_file()'
+              uv run --isolated --no-project --python "$version" --with "$package" python -I examples/streaming_tools.py
+            done
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        include:
+          - os: macos-latest
+            python-version: "3.15"
+          - os: windows-latest
+            python-version: "3.15"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv run --locked pytest
