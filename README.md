@@ -1,18 +1,14 @@
 # partial-python
 
-Execute append-only Python while source is still arriving. Python 3.11+, no runtime dependencies. Experimental API; not yet published.
+Execute append-only Python while source is still arriving. Python 3.11+, no runtime dependencies. Experimental API.
 
-`validated_deltas` must yield raw source and end normally **only after successful generation**. Its adapter must raise on truncation, failure, or a missing completion signal. If the provider exposes completion separately, use `feed()` and explicit `finish()` below.
-
-```python
-from partial_python import incremental_exec
-
-namespace = await incremental_exec(validated_deltas, {"foo": foo, "bar": bar})
+```sh
+uv add 'partial-python==0.1.0a1'
 ```
 
-Given `await foo(1)\nawait bar(2)`, `foo` runs when its newline arrives. `bar` waits for a newline or successful end of stream. The await completes after execution and returns the namespace used. **Units execute in source order, at most once each.** New input never reruns earlier units. A loop still performs its ordinary iterations, but its whole body must be sealed before execution starts.
-
 ## Input and completion
+
+Use an `Executor` for each logical response. Feed source as it arrives, then explicitly finish or abort according to the provider's completion status.
 
 ```python
 from partial_python import Executor
@@ -24,9 +20,23 @@ await executor.feed("\nawait baz(3)")  # Executes bar, buffers baz.
 await executor.finish()  # Successful EOF permits baz.
 ```
 
-`feed()` accepts new text deltas, not accumulated snapshots. `feed()` and `finish()` return completed `Execution` events. For per-unit events and diagnostics, use `Executor.stream()`. The executor retains `events`, `failed_unit`, sealed but unstarted `queued` units, and an immutable `parser_state` snapshot containing the unsealed `pending` tail.
+**Units execute in source order, at most once each.** New input never reruns earlier units. A loop still performs its ordinary iterations, but its whole body must be sealed before execution starts.
 
-`finish()` declares successful source completion. Disconnects, token limits, cancellation, and failed responses must **raise from the source iterator**, never end it normally. Use `abort()` for an idle executor; cancel and await an active operation first. Failure is terminal: earlier effects remain, later units do not start, and nothing is retried. Close a partially consumed event iterator with `aclosing` in its owning task/context. [Lifecycle and integration](docs/api.md).
+`feed()` accepts new text deltas, not accumulated snapshots. `feed()` and `finish()` return completed `Execution` events. The executor retains `events`, `failed_unit`, sealed but unstarted `queued` units, and an immutable `parser_state` snapshot containing the unsealed `pending` tail. Read results from `executor.namespace`.
+
+`finish()` declares successful source completion. On disconnects, token limits, cancellation, or failed responses, use `abort()` for an idle executor; cancel and await an active operation first. Failure is terminal: earlier effects remain, later units do not start, and nothing is retried. [Lifecycle and integration](docs/api.md).
+
+## Async text iterators
+
+When your adapter already supplies a validated async text iterator, `incremental_exec()` is a convenience wrapper. `validated_deltas` must yield raw source and end normally **only after successful generation**. Its adapter must raise on truncation, failure, or a missing completion signal.
+
+```python
+from partial_python import incremental_exec
+
+namespace = await incremental_exec(validated_deltas, {"foo": foo, "bar": bar})
+```
+
+Execution starts while source is arriving; the await completes after execution and returns the namespace used. To consume events as each unit completes, use `Executor.stream()` and retain the executor for diagnostics. Close a partially consumed event iterator with `aclosing` in its owning task/context. [Streaming adapter](docs/api.md#stateful-streaming).
 
 ## Stable boundaries
 

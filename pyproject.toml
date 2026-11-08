@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.urls]
+Repository = "https://github.com/promplate/partial-python"
+Documentation = "https://github.com/promplate/partial-python/blob/main/docs/api.md"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

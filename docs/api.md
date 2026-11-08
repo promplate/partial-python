@@ -2,16 +2,18 @@
 
 ## Public entry points
 
-Each entry point has a separate contract:
+Start with `Executor.feed()` / `finish()` / `abort()` when integrating a model response. They keep source reception and the provider's completion status explicit. The async iterator APIs adapt sources that already validate successful completion.
 
 | Entry point | Input | Output | Purpose |
 | --- | --- | --- | --- |
-| `complete(source, allow=...)` | Current full source snapshot | `Completion` with original prefix, synthetic suffix, withheld source and committed offset | Display an explicitly provisional preview. Never feed its generated suffix to execution. |
-| `Parser.feed(delta)` / `finish()` | Append-only raw Python deltas / explicit EOF | Immutable original-source `CodeUnit` ranges | Integrate with another execution runtime. |
 | `Executor.feed(delta)` / `finish()` | Append-only raw Python deltas / explicit EOF | Tuple of completed `Execution` events | Own provider status handling explicitly. |
 | `Executor.abort()` | No arguments; executor must be idle | `None`; retains diagnostic state | Abandon pending source without executing it. |
-| `Executor.stream(deltas)` | A validated async text iterator | Completed events with retained executor diagnostics | Stateful pull-based consumption. |
-| `await incremental_exec(deltas)` | The same validated iterator | The namespace used, after successful execution | Execute without consuming per-unit events. |
+| `await incremental_exec(deltas)` | A validated async text iterator | The namespace used, after successful execution | Convenience wrapper when per-unit events are unnecessary. |
+| `Executor.stream(deltas)` | The same validated iterator | Completed events with retained executor diagnostics | Consume events as each unit completes. |
+| `Parser.feed(delta)` / `finish()` | Append-only raw Python deltas / explicit EOF | Immutable original-source `CodeUnit` ranges | Integrate with another execution runtime. |
+| `complete(source, allow=...)` | Current full source snapshot | `Completion` with original prefix, synthetic suffix, withheld source and committed offset | Display an explicitly provisional preview. Never feed its generated suffix to execution. |
+
+A validated iterator ends normally only after authoritative successful generation. Truncation, failure, or a missing completion signal must raise; normal exhaustion authorizes `finish()`.
 
 `feed` always means a new delta. It must not accept whole accumulated snapshots implicitly: guessing whether repeated text is a retransmission would make legitimate repeated Python indistinguishable from duplication. A snapshot adapter should independently enforce `new.startswith(previous)` and emit only the new suffix; a changed prefix is terminal. A reconnect adapter needs its own durable replay/offset policy and must not feed an already executed prefix again.
 
@@ -21,7 +23,7 @@ The execution rule should not gain an eager mode that closes an unfinished loop 
 
 `Executor(namespace=None, *, filename="<partial-python>")` uses a supplied dictionary as-is. Without one, it creates a namespace with `__name__ = "__main__"`. Include that binding explicitly when a supplied namespace should behave as a script. No module is registered in `sys.modules`.
 
-`await incremental_exec(validated_deltas, namespace=None, *, filename="<partial-python>")` follows the same namespace rules and returns that exact dictionary on success. It executes while source arrives; the await finishes only after execution and source cleanup complete. For per-unit events or diagnostics after failure, keep an `Executor` and consume its `stream()` instead.
+`await incremental_exec(validated_deltas, namespace=None, *, filename="<partial-python>")` follows the same namespace rules and returns that exact dictionary on success. It executes while source arrives; the await finishes only after execution and source cleanup complete. Keep an `Executor` when you need diagnostics after failure; use its `stream()` when you also need events as each unit completes.
 
 Each `Execution` records its index, original `unit`, and monotonic `started_at` / `completed_at` times. It does not capture expression results or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`.
 
