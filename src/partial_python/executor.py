@@ -8,6 +8,7 @@ import inspect
 import sys
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable
+from contextlib import aclosing
 from dataclasses import dataclass
 from time import monotonic
 from types import CodeType
@@ -22,7 +23,7 @@ def _character_column(text: str, byte_column: int | None) -> int | None:
     return len(text.encode()[: byte_column - 1].decode(errors="replace")) + 1
 
 
-ExecutionState = Literal["open", "finished", "failed", "aborted"]
+ExecutorState = Literal["open", "finished", "failed", "aborted"]
 
 
 class UnsupportedSyntaxError(SyntaxError):
@@ -31,6 +32,12 @@ class UnsupportedSyntaxError(SyntaxError):
 
 @dataclass(frozen=True, slots=True)
 class ParserState:
+    """Immutable parser snapshot; read ``executor.parser_state`` again for current values.
+
+    ``committed`` counts source characters sealed by parsing, not executed code.
+    ``closed`` records parser EOF, not the executor's terminal state.
+    """
+
     pending: str
     committed: int
     closed: bool
@@ -38,6 +45,12 @@ class ParserState:
 
 @dataclass(frozen=True, slots=True)
 class Execution:
+    """One successfully completed unit, with zero-based index and monotonic-second timestamps.
+
+    Timing includes compilation and scheduling; an absent event does not prove
+    that a failed or cancelled unit had no effects.
+    """
+
     index: int
     unit: CodeUnit
     started_at: float
@@ -84,10 +97,10 @@ class Executor:
         self._prologue = True
         self._first = True
         self._busy = False
-        self._state: ExecutionState = "open"
+        self._state: ExecutorState = "open"
         self._failed_unit: CodeUnit | None = None
         self._error: BaseException | None = None
-        self._unexecuted: deque[CodeUnit] = deque()
+        self._queued: deque[CodeUnit] = deque()
 
     @property
     def namespace(self) -> dict[str, Any]:
@@ -102,20 +115,21 @@ class Executor:
         return self._failed_unit
 
     @property
-    def parser(self) -> ParserState:
-        """Read-only diagnostics; accepting text directly would bypass the execution ledger."""
+    def parser_state(self) -> ParserState:
+        """Snapshot of parsing progress, separate from completed execution events."""
         return ParserState(self._parser.pending, self._parser.committed, self._parser.closed)
 
     @property
-    def unexecuted(self) -> tuple[CodeUnit, ...]:
-        return tuple(self._unexecuted)
+    def queued(self) -> tuple[CodeUnit, ...]:
+        """Sealed units not yet started; excludes the unsealed ``parser_state.pending`` tail."""
+        return tuple(self._queued)
 
     @property
     def events(self) -> tuple[Execution, ...]:
         return tuple(self._events)
 
     @property
-    def state(self) -> ExecutionState:
+    def state(self) -> ExecutorState:
         return self._state
 
     def _enter(self) -> None:
@@ -205,12 +219,17 @@ class Executor:
         return event
 
     async def feed(self, delta: str) -> tuple[Execution, ...]:
+        """Append new source and execute its sealed units in order.
+
+        Return only this call's completed events. On failure, earlier effects
+        remain; inspect ``events``, ``failed_unit``, ``queued`` and ``parser_state``.
+        """
         self._enter()
         try:
-            self._unexecuted.extend(self._parser.feed(delta))
+            self._queued.extend(self._parser.feed(delta))
             events = []
-            while self._unexecuted:
-                events.append(await self._run(self._unexecuted.popleft()))
+            while self._queued:
+                events.append(await self._run(self._queued.popleft()))
             return tuple(events)
         except BaseException as error:
             self._error = error
@@ -220,12 +239,17 @@ class Executor:
             self._busy = False
 
     async def finish(self) -> tuple[Execution, ...]:
+        """Declare successful EOF and execute the remaining source, then close.
+
+        Never use as unconditional cleanup: this can execute a pending loop.
+        Invalid EOF or execution failure is terminal and preserves earlier effects.
+        """
         self._enter()
         try:
-            self._unexecuted.extend(self._parser.finish())
+            self._queued.extend(self._parser.finish())
             events = []
-            while self._unexecuted:
-                events.append(await self._run(self._unexecuted.popleft()))
+            while self._queued:
+                events.append(await self._run(self._queued.popleft()))
             self._state = "finished"
             return tuple(events)
         except BaseException as error:
@@ -267,19 +291,19 @@ class Executor:
                     break
                 if task is not None and task.cancelling() > cancellations:
                     raise asyncio.CancelledError
-                self._unexecuted.extend(self._parser.feed(chunk))
-                if not self._unexecuted:
+                self._queued.extend(self._parser.feed(chunk))
+                if not self._queued:
                     # Buffered input can return immediately without suspending.
                     # Keep empty/unfinished streams cancellable between chunks.
                     await asyncio.sleep(0)
-                while self._unexecuted:
-                    event = await self._run(self._unexecuted.popleft())
+                while self._queued:
+                    event = await self._run(self._queued.popleft())
                     yielding = True
                     yield event
                     yielding = False
-            self._unexecuted.extend(self._parser.finish())
-            while self._unexecuted:
-                event = await self._run(self._unexecuted.popleft())
+            self._queued.extend(self._parser.finish())
+            while self._queued:
+                event = await self._run(self._queued.popleft())
                 yielding = True
                 yield event
                 yielding = False
@@ -321,6 +345,14 @@ class Executor:
                 self._busy = False
 
 
-def incremental_exec(chunks: AsyncIterable[str], namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>") -> AsyncGenerator[Execution, None]:
-    """Return an execution stream; use Executor.stream when diagnostics are needed."""
-    return Executor(namespace, filename=filename).stream(chunks)
+async def incremental_exec(chunks: AsyncIterable[str], namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>") -> dict[str, Any]:
+    """Execute validated source as it arrives and return the namespace used.
+
+    Normal iterator exhaustion authorizes EOF. The source adapter must raise on
+    truncation or failure. Use ``Executor.stream`` for events and diagnostics.
+    """
+    executor = Executor(namespace, filename=filename)
+    async with aclosing(executor.stream(chunks)) as events:
+        async for _ in events:
+            pass
+    return executor.namespace

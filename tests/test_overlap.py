@@ -90,7 +90,7 @@ async def test_producer_failure_cancels_active_unit_and_never_starts_later_units
     assert calls == ["started"] and closed.is_set()
     assert executor.state == "failed" and isinstance(executor.error, asyncio.CancelledError)
     assert executor.failed_unit.source == "await first()\n"
-    assert [unit.source for unit in executor.unexecuted] == (["calls.append('later')\n"] if same_chunk else [])
+    assert [unit.source for unit in executor.queued] == (["calls.append('later')\n"] if same_chunk else [])
 
 
 @pytest.mark.parametrize("blocked_on", ["queue", "receive"])
@@ -154,7 +154,7 @@ async def test_local_cancellation_closes_source_and_does_not_finish_pending_suit
         await task
     assert calls == [] and closed.is_set()
     assert executor.state == "failed" and isinstance(executor.error, asyncio.CancelledError)
-    assert executor.parser.pending == "if True:\n    calls.append('pending')\n"
+    assert executor.parser_state.pending == "if True:\n    calls.append('pending')\n"
 
 
 @pytest.mark.parametrize("capacity", [0, -1, True, 1.5])
@@ -224,7 +224,7 @@ async def test_cancelled_source_cancels_active_tool_instead_of_becoming_eof(swal
         await asyncio.wait_for(execute_buffered(source(), executor), 1)
     assert closed.is_set() and calls == []
     assert executor.state == "failed" and isinstance(executor.error, asyncio.CancelledError)
-    assert executor.parser.pending == "if True:\n    calls.append('pending')\n"
+    assert executor.parser_state.pending == "if True:\n    calls.append('pending')\n"
 
 
 async def test_busy_executor_rejection_does_not_abort_another_owners_operation():

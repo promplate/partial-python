@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import traceback
+from contextvars import ContextVar
 
 import pytest
 
@@ -176,7 +177,7 @@ async def test_concurrent_feed_is_rejected_without_accepting_source():
         release.set()
         await task
         assert "unaccepted" not in executor.namespace
-        assert executor.parser.pending == ""
+        assert executor.parser_state.pending == ""
         await executor.finish()
     finally:
         task.cancel()
@@ -307,7 +308,7 @@ async def test_invalid_eof_never_repairs_or_executes_tail():
     assert executor.state == "failed"
 
 
-async def test_incremental_exec_runs_before_requesting_next_delta():
+async def test_stream_runs_before_requesting_next_delta():
     calls = []
 
     async def chunks():
@@ -315,18 +316,18 @@ async def test_incremental_exec_runs_before_requesting_next_delta():
         assert calls == [1]
         yield "calls.append(2)"
 
-    events = [event async for event in incremental_exec(chunks(), {"calls": calls})]
+    events = [event async for event in Executor({"calls": calls}).stream(chunks())]
     assert calls == [1, 2]
     assert len(events) == 2
 
 
-async def test_closing_event_iterator_leaves_same_chunk_remainder_unexecuted():
+async def test_closing_event_iterator_leaves_same_chunk_remainder_queued():
     calls = []
 
     async def chunks():
         yield "calls.append(1)\ncalls.append(2)\n"
 
-    stream = incremental_exec(chunks(), {"calls": calls})
+    stream = Executor({"calls": calls}).stream(chunks())
     first = await anext(stream)
     assert first.index == 0
     assert calls == [1]
@@ -335,16 +336,20 @@ async def test_closing_event_iterator_leaves_same_chunk_remainder_unexecuted():
 
 
 async def test_transport_failure_does_not_finalize_pending_compound():
-    calls = []
+    calls, closed = [], []
+    failure = ConnectionError("truncated model response")
 
     async def chunks():
-        yield "calls.append(1)\nif True:\n    calls.append(2)\n"
-        raise ConnectionError("truncated model response")
+        try:
+            yield "calls.append(1)\nif True:\n    calls.append(2)\n"
+            raise failure
+        finally:
+            closed.append(True)
 
-    with pytest.raises(ConnectionError):
-        async for _ in incremental_exec(chunks(), {"calls": calls}):
-            pass
-    assert calls == [1]
+    with pytest.raises(ConnectionError) as captured:
+        await incremental_exec(chunks(), {"calls": calls})
+    assert captured.value is failure
+    assert calls == [1] and closed == [True]
 
 
 async def test_deep_expression_does_not_recurse_through_module_policy_visitor():
@@ -375,3 +380,95 @@ async def test_supplied_namespace_identity_is_not_replaced_or_seeded(namespace):
     assert namespace == expected
     await executor.feed("value = 1\n")
     assert namespace.get("__name__") in (None, "provided")
+
+
+async def test_incremental_exec_runs_early_in_order_and_returns_supplied_namespace():
+    calls = []
+    namespace = {"calls": calls, "__name__": "provided"}
+
+    async def chunks():
+        yield "calls.append('first')\n"
+        assert calls == ["first"]
+        yield "calls.append('second')\nvalue = 42"
+
+    result = await incremental_exec(chunks(), namespace)
+    assert result is namespace
+    assert result["value"] == 42 and result["__name__"] == "provided"
+    assert calls == ["first", "second"]
+
+
+async def test_incremental_exec_returns_independent_default_execution_namespaces():
+    async def chunks():
+        yield "identity = globals()\nvalue = 42"
+
+    first = await incremental_exec(chunks())
+    second = await incremental_exec(chunks())
+    assert first is first["identity"] and second is second["identity"]
+    assert first is not second
+    assert first["__name__"] == second["__name__"] == "__main__"
+    assert first["value"] == second["value"] == 42
+
+
+async def test_incremental_exec_preserves_caller_task_context_across_source_and_units():
+    context = ContextVar("incremental_exec_context", default="outside")
+    owner = asyncio.current_task()
+    namespace = {"context": context, "asyncio": asyncio, "owner": owner}
+
+    async def chunks():
+        assert asyncio.current_task() is owner
+        yield "token = context.set('inside')\n"
+        assert context.get() == "inside"
+        yield "assert asyncio.current_task() is owner\ncontext.reset(token)"
+
+    await incremental_exec(chunks(), namespace)
+    assert context.get() == "outside"
+
+
+async def test_incremental_exec_runtime_failure_preserves_effects_and_closes_source():
+    calls, closed = [], []
+    failure = ValueError("tool failed")
+
+    async def chunks():
+        try:
+            yield "calls.append('once')\nraise failure\ncalls.append('queued')\n"
+            pytest.fail("source must not be resumed after execution fails")
+        finally:
+            closed.append(True)
+
+    with pytest.raises(ValueError) as captured:
+        await incremental_exec(chunks(), {"calls": calls, "failure": failure}, filename="helper_stream.py")
+    assert captured.value is failure
+    assert calls == ["once"] and closed == [True]
+    frame = next(frame for frame in reversed(traceback.extract_tb(captured.value.__traceback__)) if frame.filename == "helper_stream.py")
+    assert frame.lineno == 2
+
+
+async def test_incremental_exec_cancellation_joins_cleanup_without_running_later_units():
+    calls, closed = [], []
+    entered = asyncio.Event()
+
+    async def wait():
+        try:
+            entered.set()
+            await asyncio.Event().wait()
+        finally:
+            calls.append("cleanup")
+
+    async def chunks():
+        try:
+            yield "calls.append('once')\nawait wait()\ncalls.append('queued')\n"
+            pytest.fail("cancelled execution must not request more source")
+        finally:
+            closed.append(True)
+
+    task = asyncio.create_task(incremental_exec(chunks(), {"calls": calls, "wait": wait}))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert calls == ["once"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert calls == ["once", "cleanup"] and closed == [True]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

@@ -21,9 +21,9 @@ async def test_stateful_stream_reports_success_and_retains_events():
     assert executor.namespace["second"] == 2
     assert executor.error is None
     assert executor.failed_unit is None
-    assert executor.unexecuted == ()
-    assert executor.parser.closed is True
-    assert executor.parser.pending == ""
+    assert executor.queued == ()
+    assert executor.parser_state.closed is True
+    assert executor.parser_state.pending == ""
 
 
 async def test_stream_can_continue_previously_fed_partial_source():
@@ -47,9 +47,9 @@ async def test_stream_runtime_error_preserves_full_source_accounting():
     assert executor.error is captured.value
     assert executor.events == tuple(observed)
     assert executor.failed_unit.source == "1 / 0\n"
-    assert [statement.source for statement in executor.unexecuted] == ["never = 2\n"]
-    assert executor.parser.pending == "incomplete ="
-    reconstructed = "".join(event.unit.source for event in observed) + executor.failed_unit.source + "".join(statement.source for statement in executor.unexecuted) + executor.parser.pending
+    assert [statement.source for statement in executor.queued] == ["never = 2\n"]
+    assert executor.parser_state.pending == "incomplete ="
+    reconstructed = "".join(event.unit.source for event in observed) + executor.failed_unit.source + "".join(statement.source for statement in executor.queued) + executor.parser_state.pending
     assert reconstructed == source
     assert "never" not in executor.namespace
 
@@ -70,8 +70,8 @@ async def test_early_close_keeps_queue_and_abandons_pending_source():
     assert executor.state == "aborted"
     assert executor.error is None
     assert executor.failed_unit is None
-    assert [statement.source for statement in executor.unexecuted] == ["second = 2\n"]
-    assert executor.parser.pending == "incomplete ="
+    assert [statement.source for statement in executor.queued] == ["second = 2\n"]
+    assert executor.parser_state.pending == "incomplete ="
     assert "second" not in executor.namespace
     assert closed == [True]
     with pytest.raises(RuntimeError, match="aborted"):
@@ -161,7 +161,7 @@ async def test_source_failure_records_error_without_finalizing_pending_suite():
     assert executor.state == "failed"
     assert executor.namespace["before"] == 1
     assert "never" not in executor.namespace
-    assert executor.parser.pending == "if True:\n    never = 2\n"
+    assert executor.parser_state.pending == "if True:\n    never = 2\n"
     assert closed == [True]
 
 
@@ -274,7 +274,7 @@ async def test_secondary_diagnostics_cannot_replace_primary_execution_failure(br
         await anext(executor.stream(source()))
     assert captured.value is executor.error is primary
     assert executor.state == "failed" and executor.failed_unit.source == "raise primary\n"
-    assert [unit.source for unit in executor.unexecuted] == ["never = 1\n"]
+    assert [unit.source for unit in executor.queued] == ["never = 1\n"]
     if broken == "add_note":
         assert any("source close failed" in note for note in primary.__notes__)
 
@@ -320,7 +320,7 @@ async def test_stream_cancellation_records_failed_unit_and_preserves_queue():
         assert executor.error is captured.value
         assert executor.state == "failed"
         assert executor.failed_unit.source == "await wait()\n"
-        assert [statement.source for statement in executor.unexecuted] == ["never = 2\n"]
+        assert [statement.source for statement in executor.queued] == ["never = 2\n"]
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -351,8 +351,8 @@ async def test_buffered_unsealed_input_yields_to_cancellation_before_requesting_
         await task
     assert pulled == [0] and closed == [True]
     assert executor.state == "failed" and executor.error is captured.value
-    assert executor.failed_unit is None and executor.events == executor.unexecuted == ()
-    assert executor.parser.pending == first and not executor.parser.closed
+    assert executor.failed_unit is None and executor.events == executor.queued == ()
+    assert executor.parser_state.pending == first and not executor.parser_state.closed
 
 
 async def test_cancellation_during_source_cleanup_cannot_report_success():
@@ -417,7 +417,7 @@ async def test_cleanup_cancellation_retains_prior_execution_failure_in_exception
         assert executor.error is captured.value and executor.state == "failed"
         assert captured.value.__context__ is primary and not captured.value.__suppress_context__
         assert executor.failed_unit.source == "raise primary\n"
-        assert [unit.source for unit in executor.unexecuted] == ["never = 1\n"]
+        assert [unit.source for unit in executor.queued] == ["never = 1\n"]
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -520,7 +520,7 @@ async def test_internal_generator_exit_is_failure_not_consumer_close(origin, cle
         assert executor.failed_unit.source == ("raise primary" if origin == "finish" else "raise primary\n")
     else:
         assert executor.failed_unit is None
-    assert [unit.source for unit in executor.unexecuted] == (["never = 1\n"] if origin == "body" else [])
+    assert [unit.source for unit in executor.queued] == (["never = 1\n"] if origin == "body" else [])
     if cleanup_fails and origin != "aiter":
         assert any("source cleanup failed" in note for note in primary.__notes__)
     with pytest.raises(RuntimeError, match="executor is failed"):
@@ -548,7 +548,7 @@ async def test_consumer_injected_exception_is_distinct_from_source_failure(excep
         assert executor.state == ("aborted" if exception is GeneratorExit else "failed")
         assert executor.error is (None if exception is GeneratorExit else primary)
         assert executor.failed_unit is None and len(executor.events) == 1
-        assert [unit.source for unit in executor.unexecuted] == ["never = 2\n"]
+        assert [unit.source for unit in executor.queued] == ["never = 2\n"]
         assert "never" not in executor.namespace
     finally:
         await stream.aclose()

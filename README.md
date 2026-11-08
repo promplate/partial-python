@@ -2,14 +2,15 @@
 
 Execute append-only Python while source is still arriving. Python 3.11+, no runtime dependencies. Experimental API; not yet published.
 
+`validated_deltas` must yield raw source and end normally **only after successful generation**. Its adapter must raise on truncation, failure, or a missing completion signal. If the provider exposes completion separately, use `feed()` and explicit `finish()` below.
+
 ```python
 from partial_python import incremental_exec
 
-async for event in incremental_exec(model_deltas, namespace={"foo": foo, "bar": bar}):
-    print(event.unit.source)
+namespace = await incremental_exec(validated_deltas, {"foo": foo, "bar": bar})
 ```
 
-Given `await foo(1)\nawait bar(2)`, `foo` runs when its newline arrives. `bar` waits for a newline or successful end of stream. **Units execute in source order, at most once each.** New input never reruns earlier units. A loop still performs its ordinary iterations, but its whole body must be sealed before execution starts.
+Given `await foo(1)\nawait bar(2)`, `foo` runs when its newline arrives. `bar` waits for a newline or successful end of stream. The await completes after execution and returns the namespace used. **Units execute in source order, at most once each.** New input never reruns earlier units. A loop still performs its ordinary iterations, but its whole body must be sealed before execution starts.
 
 ## Input and completion
 
@@ -23,7 +24,7 @@ await executor.feed("\nawait baz(3)")  # Executes bar, buffers baz.
 await executor.finish()  # Successful EOF permits baz.
 ```
 
-`feed()` accepts new text deltas, not accumulated snapshots. `feed()` and `finish()` return completed `Execution` events. `Executor.stream()` consumes an async iterator while retaining diagnostics such as `events`, `failed_unit`, `unexecuted`, and `parser.pending`.
+`feed()` accepts new text deltas, not accumulated snapshots. `feed()` and `finish()` return completed `Execution` events. For per-unit events and diagnostics, use `Executor.stream()`. The executor retains `events`, `failed_unit`, sealed but unstarted `queued` units, and an immutable `parser_state` snapshot containing the unsealed `pending` tail.
 
 `finish()` declares successful source completion. Disconnects, token limits, cancellation, and failed responses must **raise from the source iterator**, never end it normally. Use `abort()` for an idle executor; cancel and await an active operation first. Failure is terminal: earlier effects remain, later units do not start, and nothing is retried. Close a partially consumed event iterator with `aclosing` in its owning task/context. [Lifecycle and integration](docs/api.md).
 

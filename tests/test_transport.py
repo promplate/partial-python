@@ -7,7 +7,7 @@ import pytest
 from examples import overlap
 from examples import transport as example
 from examples.transport import SourceAborted, SourceProtocolError, execute_connection, record_bytes, source_deltas
-from partial_python import incremental_exec
+from partial_python import Executor, incremental_exec
 
 
 def reader_for(*records):
@@ -28,7 +28,7 @@ async def test_successful_terminal_record_seals_final_call_without_newline():
     source = "calls.append(1)"
     reader = reader_for({"type": "delta", "text": source}, {"type": "done", "status": "completed", "source": source})
     calls = []
-    events = [event async for event in incremental_exec(source_deltas(reader), {"calls": calls})]
+    events = [event async for event in Executor({"calls": calls}).stream(source_deltas(reader))]
     assert calls == [1]
     assert len(events) == 1
 
@@ -39,8 +39,7 @@ async def test_aborted_terminal_status_never_seals_pending_compound(status):
     reader = reader_for({"type": "delta", "text": source}, {"type": "done", "status": status})
     calls = []
     with pytest.raises(SourceAborted) as captured:
-        async for _ in incremental_exec(source_deltas(reader), {"calls": calls}):
-            pass
+        await incremental_exec(source_deltas(reader), {"calls": calls})
     assert captured.value.status == status
     assert calls == ["early"]
 
@@ -49,8 +48,7 @@ async def test_bare_socket_eof_is_failure_even_when_pending_source_is_valid():
     reader = reader_for({"type": "delta", "text": "calls.append(1)"})
     calls = []
     with pytest.raises(SourceProtocolError, match="without a completed"):
-        async for _ in incremental_exec(source_deltas(reader), {"calls": calls}):
-            pass
+        await incremental_exec(source_deltas(reader), {"calls": calls})
     assert calls == []
 
 
@@ -59,8 +57,7 @@ async def test_final_source_rewrite_rejected_before_sealing_pending_suite():
     reader = reader_for({"type": "delta", "text": source}, {"type": "done", "status": "completed", "source": source + "# rewritten"})
     calls = []
     with pytest.raises(SourceProtocolError, match="does not match"):
-        async for _ in incremental_exec(source_deltas(reader), {"calls": calls}):
-            pass
+        await incremental_exec(source_deltas(reader), {"calls": calls})
     # A final consistency check cannot roll back the previously committed call.
     assert calls == ["early"]
 

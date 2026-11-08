@@ -21,4 +21,4 @@ async def test_broad_warning_as_error_remains_terminal_without_executing_the_tai
     assert executor.state == "failed" and executor.error is caught.value
     assert caught.value.lineno == 3
     assert executor.namespace["first"] == 1 and "value" not in executor.namespace
-    assert executor.parser.pending == tail
+    assert executor.parser_state.pending == tail

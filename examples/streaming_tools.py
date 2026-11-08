@@ -51,8 +51,7 @@ async def main():
         source_finished = True
         log("source finished normally")
 
-    async for event in incremental_exec(chunks(), {"foo": foo, "bar": bar, "baz": baz}):
-        log(f"completed statement {event.index}: characters {event.unit.start}:{event.unit.end}")
+    await incremental_exec(chunks(), {"foo": foo, "bar": bar, "baz": baz})
     assert calls == [("foo", 1), ("bar", 2), ("bar", 3), ("baz", 4)]
     log("verified: early execution, ordered awaits, deferred loop, explicit EOF")
 

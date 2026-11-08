@@ -7,7 +7,7 @@ import pytest
 from partial_python import Executor, UnsupportedSyntaxError, incremental_exec
 
 
-async def test_closing_wrapper_closes_its_source_iterator():
+async def test_closing_stream_closes_its_source_iterator():
     closed = []
 
     async def chunks():
@@ -18,7 +18,7 @@ async def test_closing_wrapper_closes_its_source_iterator():
             closed.append(True)
 
     source = chunks()
-    stream = incremental_exec(source)
+    stream = Executor().stream(source)
     try:
         await anext(stream)
         await stream.aclose()
@@ -39,7 +39,7 @@ async def test_execution_failure_closes_source_transport():
             closed.append(True)
 
     source = chunks()
-    stream = incremental_exec(source)
+    stream = Executor().stream(source)
     try:
         with pytest.raises(ZeroDivisionError):
             await anext(stream)
@@ -65,7 +65,7 @@ async def test_cancellation_during_execution_closes_source_transport():
             closed.append(True)
 
     source = chunks()
-    stream = incremental_exec(source, {"wait": wait})
+    stream = Executor({"wait": wait}).stream(source)
     task = asyncio.create_task(anext(stream))
     try:
         await asyncio.wait_for(entered.wait(), 1)
@@ -154,7 +154,7 @@ async def test_backpressure_does_not_pull_next_chunk_before_current_events():
         yield "calls.append(3)\n"
 
     source = chunks()
-    stream = incremental_exec(source, {"calls": calls})
+    stream = Executor({"calls": calls}).stream(source)
     try:
         assert (await anext(stream)).index == 0
         assert pulls == [1]
@@ -185,7 +185,7 @@ async def test_generator_supports_iterables_without_aclose():
                 raise StopAsyncIteration from None
 
     namespace = {}
-    events = [event async for event in incremental_exec(Chunks(), namespace)]
+    events = [event async for event in Executor(namespace).stream(Chunks())]
     assert len(events) == 2
     assert namespace["y"] == 2
 
@@ -232,7 +232,7 @@ async def test_cancellation_while_receiving_source_cannot_be_swallowed_into_exec
             yield "calls.append('after cancellation')\n"
 
     source = chunks()
-    stream = incremental_exec(source, {"calls": calls})
+    stream = Executor({"calls": calls}).stream(source)
     task = asyncio.create_task(anext(stream))
     try:
         await asyncio.wait_for(entered.wait(), 1)
@@ -277,7 +277,7 @@ async def test_source_swallowing_cancellation_into_eof_cannot_seal_pending_compo
             return
 
     source = chunks()
-    stream = incremental_exec(source, {"calls": calls})
+    stream = Executor({"calls": calls}).stream(source)
     task = asyncio.create_task(anext(stream))
     try:
         await asyncio.wait_for(entered.wait(), 1)
@@ -295,7 +295,7 @@ async def test_source_swallowing_cancellation_into_eof_cannot_seal_pending_compo
 async def test_parser_inspection_returns_immutable_independent_snapshot():
     executor = Executor()
     await executor.feed("first = 1")
-    snapshot = executor.parser
+    snapshot = executor.parser_state
     assert snapshot.pending == "first = 1"
     assert snapshot.committed == 0
     assert snapshot.closed is False
@@ -304,14 +304,14 @@ async def test_parser_inspection_returns_immutable_independent_snapshot():
     with pytest.raises((AttributeError, TypeError)):
         snapshot.pending = "injected = True\n"
     with pytest.raises((AttributeError, TypeError)):
-        executor.parser = snapshot
+        executor.parser_state = snapshot
     await executor.feed("\n")
     assert snapshot.pending == "first = 1"
-    assert executor.parser.pending == ""
-    assert executor.parser.committed == len("first = 1\n")
+    assert executor.parser_state.pending == ""
+    assert executor.parser_state.committed == len("first = 1\n")
     assert executor.namespace["first"] == 1
     await executor.finish()
-    assert executor.parser.closed is True
+    assert executor.parser_state.closed is True
     assert snapshot.closed is False
 
 
@@ -322,16 +322,16 @@ async def test_failed_stream_preserves_all_accepted_source_for_diagnostics():
         await executor.feed(source)
     assert executor.error is captured.value
     assert executor.failed_unit.source == "1 / 0\n"
-    assert isinstance(executor.unexecuted, tuple)
-    assert [statement.source for statement in executor.unexecuted] == ["never = 2\n"]
-    assert executor.parser.pending == "incomplete ="
-    reconstructed = "".join(event.unit.source for event in executor.events) + executor.failed_unit.source + "".join(statement.source for statement in executor.unexecuted) + executor.parser.pending
+    assert isinstance(executor.queued, tuple)
+    assert [statement.source for statement in executor.queued] == ["never = 2\n"]
+    assert executor.parser_state.pending == "incomplete ="
+    reconstructed = "".join(event.unit.source for event in executor.events) + executor.failed_unit.source + "".join(statement.source for statement in executor.queued) + executor.parser_state.pending
     assert reconstructed == source
     assert "never" not in executor.namespace
     with pytest.raises(RuntimeError):
         await executor.feed("invalid retry\n")
     assert executor.error is captured.value
-    assert [statement.source for statement in executor.unexecuted] == ["never = 2\n"]
+    assert [statement.source for statement in executor.queued] == ["never = 2\n"]
 
 
 async def test_live_queue_excludes_current_statement_and_preserves_later_units():
@@ -345,26 +345,26 @@ async def test_live_queue_excludes_current_statement_and_preserves_later_units()
     task = asyncio.create_task(executor.feed("before = 1\nawait wait()\nafter = 2\n"))
     try:
         await asyncio.wait_for(entered.wait(), 1)
-        assert [statement.source for statement in executor.unexecuted] == ["after = 2\n"]
+        assert [statement.source for statement in executor.queued] == ["after = 2\n"]
         assert [event.unit.source for event in executor.events] == ["before = 1\n"]
         assert executor.failed_unit is None
         assert executor.error is None
         release.set()
         await task
-        assert executor.unexecuted == ()
+        assert executor.queued == ()
         assert executor.error is None
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_compile_failure_keeps_failed_unit_separate_from_unexecuted_queue():
+async def test_compile_failure_keeps_failed_unit_separate_from_queue():
     executor = Executor()
     with pytest.raises(SyntaxError) as captured:
         await executor.feed("return 1\nnever = 2\n")
     assert executor.error is captured.value
     assert executor.failed_unit.source == "return 1\n"
-    assert [statement.source for statement in executor.unexecuted] == ["never = 2\n"]
+    assert [statement.source for statement in executor.queued] == ["never = 2\n"]
     assert executor.events == ()
     assert "never" not in executor.namespace
 
@@ -376,8 +376,8 @@ async def test_incomplete_tail_error_is_retained_without_fabricated_attempt():
         await executor.finish()
     assert executor.error is captured.value
     assert executor.failed_unit is None
-    assert executor.unexecuted == ()
-    assert executor.parser.pending == "incomplete ="
+    assert executor.queued == ()
+    assert executor.parser_state.pending == "incomplete ="
     assert len(executor.events) == 1
 
 
@@ -397,7 +397,7 @@ async def test_cancellation_records_error_and_preserves_queued_source():
             await task
         assert executor.error is captured.value
         assert executor.failed_unit.source == "await wait()\n"
-        assert [statement.source for statement in executor.unexecuted] == ["never = 2\n"]
+        assert [statement.source for statement in executor.queued] == ["never = 2\n"]
         assert executor.events == ()
     finally:
         task.cancel()
@@ -407,18 +407,18 @@ async def test_cancellation_records_error_and_preserves_queued_source():
 async def test_success_and_explicit_abort_do_not_invent_errors():
     executor = Executor()
     assert executor.error is None
-    assert executor.unexecuted == ()
+    assert executor.queued == ()
     await executor.feed("value = 1\n")
     await executor.finish()
     assert executor.error is None
-    assert executor.unexecuted == ()
+    assert executor.queued == ()
     aborted = Executor()
     await aborted.feed("if True:\n    value = 1\n")
     aborted.abort()
     assert aborted.error is None
     assert aborted.failed_unit is None
-    assert aborted.unexecuted == ()
-    assert aborted.parser.pending == "if True:\n    value = 1\n"
+    assert aborted.queued == ()
+    assert aborted.parser_state.pending == "if True:\n    value = 1\n"
 
 
 async def test_source_cleanup_error_does_not_mask_execution_error():
@@ -429,7 +429,7 @@ async def test_source_cleanup_error_does_not_mask_execution_error():
             raise OSError("source transport close failed")
 
     source = chunks()
-    stream = incremental_exec(source)
+    stream = Executor().stream(source)
     try:
         with pytest.raises(ZeroDivisionError):
             await anext(stream)
@@ -452,7 +452,7 @@ async def test_source_cleanup_error_does_not_mask_cancellation():
             raise OSError("source transport close failed")
 
     source = chunks()
-    stream = incremental_exec(source, {"wait": wait})
+    stream = Executor({"wait": wait}).stream(source)
     task = asyncio.create_task(anext(stream))
     try:
         await asyncio.wait_for(entered.wait(), 1)
@@ -478,8 +478,7 @@ async def test_cleanup_failure_without_primary_error_remains_visible():
             raise OSError("source transport close failed")
 
     with pytest.raises(OSError, match="source transport close failed"):
-        async for _ in incremental_exec(Chunks()):
-            pass
+        await incremental_exec(Chunks())
 
 
 async def test_source_cancellation_guard_tracks_task_that_resumes_iterator():
@@ -495,7 +494,7 @@ async def test_source_cancellation_guard_tracks_task_that_resumes_iterator():
             yield "calls.append('after cancellation')\n"
 
     source = chunks()
-    stream = incremental_exec(source, {"calls": calls})
+    stream = Executor({"calls": calls}).stream(source)
     first = await asyncio.create_task(anext(stream))
     assert first.index == 0
     task = asyncio.create_task(anext(stream))

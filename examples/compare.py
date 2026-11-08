@@ -76,7 +76,7 @@ async def compare(scenario: str, emit: Callable[[dict], None], *, chunk_size: in
         return event
 
     def committed(lane):
-        return executor.parser.committed if lane == "incremental" else batch_committed
+        return executor.parser_state.committed if lane == "incremental" else batch_committed
 
     def finish_lane(lane, status, error=None):
         state = lanes[lane]

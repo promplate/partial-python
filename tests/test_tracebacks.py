@@ -41,7 +41,7 @@ async def test_top_level_error_after_await_has_original_unicode_crlf_source(tmp_
     frames = [frame for frame in traceback.extract_tb(caught.value.__traceback__) if frame.filename == str(filename)]
     assert [(frame.lineno, frame.line) for frame in frames] == [(3, "raise RuntimeError('错误')")]
     assert filename.read_bytes() == (prefix + tail).encode("utf-8")
-    assert executor.state == "failed" and not executor.parser.closed
+    assert executor.state == "failed" and not executor.parser_state.closed
 
 
 @pytest.mark.parametrize("swallowed_cancellation", [False, True])
@@ -68,6 +68,6 @@ async def test_input_failure_aborts_instead_of_finishing_pending_suite(tmp_path,
     if not swallowed_cancellation:
         assert caught.value is error
     assert calls == ["early"]
-    assert executor.state == "aborted" and not executor.parser.closed
-    assert executor.parser.pending == suite
+    assert executor.state == "aborted" and not executor.parser_state.closed
+    assert executor.parser_state.pending == suite
     assert filename.read_bytes() == (prefix + suite).encode("utf-8")

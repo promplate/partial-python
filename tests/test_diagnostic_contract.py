@@ -33,7 +33,7 @@ async def test_cancelled_unit_can_fully_return_and_assign_without_success_event(
         assert executor.failed_unit.source == "result = await work()\n"
         assert executor.error is captured.value
         assert executor.state == "failed"
-        assert [unit.source for unit in executor.unexecuted] == ["never = 1\n"]
+        assert [unit.source for unit in executor.queued] == ["never = 1\n"]
         assert "never" not in executor.namespace
     finally:
         task.cancel()
@@ -62,7 +62,7 @@ async def test_source_yielding_during_close_is_failed_cleanup_not_more_input():
         assert executor.error is captured.value
         assert executor.failed_unit is None
         assert len(executor.events) == 1
-        assert [unit.source for unit in executor.unexecuted] == ["second = 2\n"]
+        assert [unit.source for unit in executor.queued] == ["second = 2\n"]
         assert "second" not in executor.namespace
         assert "injected_during_close" not in executor.namespace
         assert closed == []
@@ -94,7 +94,7 @@ async def test_unit_iteration_signals_cannot_be_mistaken_for_source_exhaustion(m
             await anext(executor.stream(source()))
     assert executor.state == "failed" and executor.events == ()
     assert executor.failed_unit.source == "raise primary\n"
-    assert [unit.source for unit in executor.unexecuted] == ["never = 1\n"]
+    assert [unit.source for unit in executor.queued] == ["never = 1\n"]
     assert "never" not in executor.namespace
     if exception is StopAsyncIteration:
         assert executor.error is primary
@@ -124,4 +124,4 @@ async def test_native_aclose_may_consume_generator_exit_but_diagnostics_record_f
     assert await stream.aclose() is None
     assert executor.state == "failed" and executor.error is primary
     assert executor.failed_unit is None and len(executor.events) == 1
-    assert [unit.source for unit in executor.unexecuted] == ["never = 2\n"]
+    assert [unit.source for unit in executor.queued] == ["never = 2\n"]

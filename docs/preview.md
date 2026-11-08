@@ -58,7 +58,7 @@ F-strings and template strings have nested grammars and are never repaired. A co
 
 `SUITE` is deliberately a preview permission. `for item in items:` can display with a synthetic `pass`, but the real loop remains entirely pending in the execution parser. No API automatically converts a `Completion` object into an execution unit.
 
-`complete()` is a stateless snapshot operation. For streaming execution use `Executor.feed()` or `Executor.stream()`, and inspect completed events through `Execution.unit`. Calling the snapshot completer on every growing prefix necessarily rereads prior source; benchmark that separately from the incremental runtime. Display completions do not belong in `executor.unexecuted` or its completed-event journal.
+`complete()` is a stateless snapshot operation. For streaming execution use `Executor.feed()` or `Executor.stream()`, and inspect completed events through `Execution.unit`. Calling the snapshot completer on every growing prefix necessarily rereads prior source; benchmark that separately from the incremental runtime. Display completions do not belong in `executor.queued` or its completed-event journal.
 
 ## References and validation
 

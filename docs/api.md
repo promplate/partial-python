@@ -11,7 +11,7 @@ Each entry point has a separate contract:
 | `Executor.feed(delta)` / `finish()` | Append-only raw Python deltas / explicit EOF | Tuple of completed `Execution` events | Own provider status handling explicitly. |
 | `Executor.abort()` | No arguments; executor must be idle | `None`; retains diagnostic state | Abandon pending source without executing it. |
 | `Executor.stream(deltas)` | A validated async text iterator | Completed events with retained executor diagnostics | Stateful pull-based consumption. |
-| `incremental_exec(deltas)` | The same iterator | The same events and exceptions | Convenience wrapper returning an executor stream directly. |
+| `await incremental_exec(deltas)` | The same validated iterator | The namespace used, after successful execution | Execute without consuming per-unit events. |
 
 `feed` always means a new delta. It must not accept whole accumulated snapshots implicitly: guessing whether repeated text is a retransmission would make legitimate repeated Python indistinguishable from duplication. A snapshot adapter should independently enforce `new.startswith(previous)` and emit only the new suffix; a changed prefix is terminal. A reconnect adapter needs its own durable replay/offset policy and must not feed an already executed prefix again.
 
@@ -20,6 +20,8 @@ The execution rule should not gain an eager mode that closes an unfinished loop 
 ## Namespace and results
 
 `Executor(namespace=None, *, filename="<partial-python>")` uses a supplied dictionary as-is. Without one, it creates a namespace with `__name__ = "__main__"`. Include that binding explicitly when a supplied namespace should behave as a script. No module is registered in `sys.modules`.
+
+`await incremental_exec(validated_deltas, namespace=None, *, filename="<partial-python>")` follows the same namespace rules and returns that exact dictionary on success. It executes while source arrives; the await finishes only after execution and source cleanup complete. For per-unit events or diagnostics after failure, keep an `Executor` and consume its `stream()` instead.
 
 Each `Execution` records its index, original `unit`, and monotonic `started_at` / `completed_at` times. It does not capture expression results or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`.
 
@@ -35,12 +37,13 @@ The current diagnostic model is useful when its distinctions are explicit:
 | --- | --- |
 | `events` | Units that completed successfully; immutable snapshots. |
 | `failed_unit` | The attempted unit whose completion was not acknowledged; partial or complete effects may exist. A parser EOF error has no fabricated attempted unit. |
-| `unexecuted` | Accepted, sealed units that have not started. They are retained for diagnostics, not automatic retry. |
-| `parser` | Immutable snapshot of `pending`, `committed`, and `closed`; not an input interface. |
-| `parser.pending` | Source still awaiting a grammatical boundary. |
-| `parser.committed` | Number of source characters accepted by the parser; this is not an execution watermark. |
+| `queued` | Accepted, sealed units that have not started. Excludes the unsealed tail; retained for diagnostics, not automatic retry. |
+| `parser_state` | Immutable `ParserState` snapshot of `pending`, `committed`, and `closed`; read the property again for current values. |
+| `parser_state.pending` | Source still awaiting a grammatical boundary. |
+| `parser_state.committed` | Number of source characters sealed by the parser; this is not an execution watermark. |
+| `parser_state.closed` | Whether the parser received EOF, including invalid EOF; use executor `state` for execution lifecycle. |
 | `error` | The recorded terminal failure; rejected later calls must not replace it. Native generator control exceptions may be wrapped when propagated; see [exception semantics](semantics.md#failures-cancellation-and-effects). |
-| `state` | `"open"`, `"finished"`, `"failed"`, or `"aborted"`. |
+| `state` | `ExecutorState`: `"open"`, `"finished"`, `"failed"`, or `"aborted"`. |
 
 Successful events plus the failed range, queued ranges and pending tail preserve the accepted source after a mid-chunk failure. Syntax errors retain the original filename and line numbers. Cooperative cancellation is terminal, including when a producer or statement catches `CancelledError` without clearing the new cancellation request. This is not a hard deadline for code that loops forever or deliberately removes cancellation state.
 
@@ -50,7 +53,7 @@ Source ranges use half-open character offsets and one-based cursor lines. A fina
 
 ### Stateful streaming
 
-`Executor.stream(chunks) -> AsyncGenerator[Execution, None]` gives streaming callers access to the executor's diagnostics after failure. `incremental_exec()` is a plain convenience function returning that stream directly, so it does not add another async-generator cleanup boundary or duplicate the execution lifecycle.
+`Executor.stream(chunks) -> AsyncGenerator[Execution, None]` gives streaming callers per-unit events and access to diagnostics after failure. `incremental_exec()` consumes the same stream in the calling task, handling closure internally without a second execution state machine.
 
 The stream reserves the executor from its first consumption through exhaustion or explicit close, including source waits and suspended event yields. Interleaved `feed`, `finish`, `abort`, or another stream are rejected. Merely constructing an unstarted stream does not acquire the source or reserve the executor. It can continue a prefix already accepted through `feed`.
 
@@ -68,7 +71,7 @@ try:
         async for event in events:
             display_completed(event)
 except Exception:
-    inspect_failure(executor.error, executor.failed_unit, executor.unexecuted, executor.parser.pending)
+    inspect_failure(executor.error, executor.failed_unit, executor.queued, executor.parser_state.pending)
     raise
 ```
 
@@ -83,7 +86,7 @@ Exceptions from `display_completed()` belong to the caller; `executor.error` rec
 {"type": "done", "status": "completed", "source": "await tool('early')\n"}
 ```
 
-The adapter yields only `text` from delta records. A completed done record must contain the exact concatenation of those deltas. It then ends the text iterator normally, permitting `incremental_exec()` to finalize Python. The terminal record ends this logical stream; the example does not multiplex further streams on the connection.
+The adapter yields only `text` from delta records. A completed done record must contain the exact concatenation of those deltas. It then ends the text iterator normally, permitting the executor to finalize Python. The terminal record ends this logical stream; the example does not multiplex further streams on the connection.
 
 `truncated`, `cancelled`, and `failed` terminal statuses raise `SourceAborted`. A closed socket without a completed done record, a partial wire record, invalid JSON/UTF-8, wrong field types, unknown status, or different final source raises `SourceProtocolError`. None of these paths turns an unfinished suite into a completed program. An explicit completed record is required even for an empty source stream.
 

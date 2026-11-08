@@ -2,7 +2,7 @@
 
 Run: uv run examples/transport.py
 A delta record carries raw Python source. Only a completed done record whose
-source exactly matches the received deltas declares EOF to incremental_exec.
+source exactly matches the received deltas declares EOF to the executor.
 One connection carries one logical source stream; there is no retry or replay.
 """
 
@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from time import monotonic
 
-from partial_python import Execution, incremental_exec
+from partial_python import Execution, Executor
 
 MAX_RECORD_BYTES = 1 << 20
 MAX_SOURCE_CHARS = 1 << 16
@@ -112,7 +112,7 @@ async def execute_connection(host: str, port: int, namespace: dict) -> AsyncIter
     """Own a socket for one source stream and close it when consumption stops."""
     reader, writer = await asyncio.open_connection(host, port, limit=MAX_RECORD_BYTES)
     async with closing_writer(writer):
-        execution = incremental_exec(source_deltas(reader), namespace)
+        execution = Executor(namespace).stream(source_deltas(reader))
         try:
             async for event in execution:
                 yield event

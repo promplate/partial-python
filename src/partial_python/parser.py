@@ -308,6 +308,7 @@ class Parser:
         return statement
 
     def feed(self, delta: str) -> tuple[CodeUnit, ...]:
+        """Append a delta and emit original-source units stable under further appends."""
         self._ensure_open()
         if not isinstance(delta, str):
             raise TypeError("delta must be str")
@@ -391,6 +392,7 @@ class Parser:
         return tuple(result)
 
     def finish(self) -> tuple[CodeUnit, ...]:
+        """Declare successful EOF and emit the final unit; even invalid EOF closes the parser."""
         self._ensure_open()
         self._closed = True
         # Parse even a trivia-only tail: an unterminated comment string is harmless,
