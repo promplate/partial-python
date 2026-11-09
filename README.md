@@ -3,7 +3,7 @@
 Execute append-only Python while source is still arriving. Python 3.11+, no runtime dependencies. Experimental API.
 
 ```sh
-uv add 'partial-python==0.1.0a1'
+uv add 'partial-python==0.1.0a2'
 ```
 
 ## Input and completion
