@@ -1,6 +1,6 @@
 # Display completion
 
-`partial_python.complete()` is a separate, display-only API. It never executes source and never configures `Parser` or `Executor`. The runtime executes original `CodeUnit` slices sealed by actual streaming boundaries.
+`partial_python.complete()` is a separate, display-only API. It never executes source and never configures `Parser` or `Executor`. Execution uses only stable original source, including statements inside selected open blocks.
 
 ```python
 from partial_python import Allow, complete

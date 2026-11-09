@@ -20,7 +20,8 @@ async def _drive(manager: Any, asynchronous: bool) -> AsyncGenerator[tuple[bool,
     entered = requested = False
     outcome = None
     # Recreate the handled-exception state inside the native suite, preserving
-    # the body traceback and chain instead of adding this suspended driver.
+    # the body traceback and chain. Keep both branches inline: a helper call
+    # would add a driver frame to the traceback seen by the context manager.
     try:
         if asynchronous:
             async with manager as value:

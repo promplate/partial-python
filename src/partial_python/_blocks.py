@@ -1,4 +1,4 @@
-"""Internal lexical events for explicitly enabled streaming suites.
+"""Internal lexical events for selected streaming suites.
 
 Header probes recover AST fields only. Their dummy bodies never become events,
 code units, or executable code; every source span points into the original input.
@@ -141,7 +141,7 @@ def _lines(source: str, prefix: str, eof: bool, *, first_only: bool = False) -> 
 
 
 class BlockParser:
-    """Internal parser; complete public CodeUnits remain the responsibility of Parser."""
+    """Emit internal block events with original source spans."""
 
     def __init__(self, *, filename: str = "<partial-python>", stream_blocks: Block = Block.MODULE):
         self.filename = filename

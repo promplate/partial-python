@@ -1,4 +1,4 @@
-"""Sequential execution of original source under explicit interactive semantics."""
+"""Sequential execution of stable original source."""
 
 import __future__
 
@@ -30,7 +30,7 @@ ExecutorState = Literal["open", "finished", "failed", "aborted"]
 
 
 class UnsupportedSyntaxError(SyntaxError):
-    """Syntax whose cross-unit semantics cannot be preserved by this executor."""
+    """Syntax whose semantics cannot be preserved across compilation units."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,10 +48,10 @@ class ParserState:
 
 @dataclass(frozen=True, slots=True)
 class Execution:
-    """One successfully completed unit, with zero-based index and monotonic-second timestamps.
+    """One completed top-level unit, with a zero-based index and monotonic-second timestamps.
 
-    Timing includes compilation and scheduling; an absent event does not prove
-    that a failed or cancelled unit had no effects.
+    Timing includes compilation, scheduling, and source waits within open blocks.
+    An open, failed, or cancelled unit can have effects without a completed event.
     """
 
     index: int
@@ -135,6 +135,7 @@ def _has_frame(error: BaseException, code: CodeType) -> bool:
 class Executor:
     """One append-only execution stream sharing a caller-owned global namespace.
 
+    By default, stream stable bodies in if, with, and async with statements.
     Failure and cancellation are terminal: earlier effects remain, and accepted
     statements are never retried. This is an in-process executor, not a sandbox.
     Concurrent or recursive writes are rejected rather than silently reordered.
@@ -458,9 +459,9 @@ class Executor:
         return None
 
     async def feed(self, delta: str) -> tuple[Execution, ...]:
-        """Append new source and execute its sealed units in order.
+        """Append new source and execute stable code in order.
 
-        Return only this call's completed events. On failure, earlier effects
+        Return only this call's completed top-level events. On failure, earlier effects
         remain; inspect ``events``, ``failed_unit``, ``queued`` and ``parser_state``.
         """
         self._enter()
@@ -505,7 +506,7 @@ class Executor:
             self._busy = False
 
     def abort(self) -> None:
-        """Abandon pending source after a transport failure, retaining it for diagnostics."""
+        """Abandon pending source when no context is open, retaining it for diagnostics."""
         if self._busy:
             raise RuntimeError("cancel the active operation before aborting")
         if any(frame.scopes for frame in self._frames):

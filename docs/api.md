@@ -43,7 +43,7 @@ Reuse the namespace with a new executor for another logical model response. Bind
 | `ASYNC_WITH` | The same behavior with awaited context entry and exit. |
 | `ALL` | The default: exactly `MODULE | IF | WITH | ASYNC_WITH`; no unimplemented block kinds. |
 
-Disable flags using bitwise AND with their complement: `ALL & ~ASYNC_WITH`, or `ALL & ~(WITH | ASYNC_WITH)` to hold both context kinds. Use `MODULE` for top-level-only streaming, and `NONE` (equivalently, `ALL & ~MODULE`) for whole-module execution.
+Disable flags using bitwise AND with their complement: `ALL & ~ASYNC_WITH`, or `ALL & ~(WITH | ASYNC_WITH)` to hold both context kinds. Use `MODULE` for top-level-only streaming. `NONE` and `ALL & ~MODULE` both select whole-module execution.
 
 `stream_blocks` replaces the default selection. `MODULE | IF` enables top-level and conditional streaming; `IF` alone does not. Streaming also requires enabled ancestors: `MODULE | IF` cannot stream an `if` nested inside an unselected `with` or a loop. Every selection without `MODULE` buffers and compiles the whole module at EOF, preserving native module-scope `global` declarations and Python 3.14 deferred annotations. Whole-module mode emits one `Execution` even for empty input, which still initializes a missing `__builtins__` binding as native `exec("")` does. `stream_blocks` rejects integers, booleans, and preview `Allow` values. The executor exposes the selected value as its read-only `stream_blocks` property.
 
@@ -63,9 +63,9 @@ With the default `ALL`, open contexts span source reception. A real `asyncio.tim
 
 `finish()` declares authoritative successful source completion. It can release a final call without a newline or an entire compound suite. It is not a generic cleanup method. `await executor.aclose()` abandons pending source and awaits open context exits; `abort()` provides synchronous abandonment only when no context is open. Neither declares EOF. Cancel and await an active operation before closing the executor; `finally: await finish()` is the wrong integration pattern.
 
-Operations spanning an open streaming block must run in the task that opened it, including `finish()` and `aclose()`. Ordinary body exceptions follow native context-manager suppression: suppression skips the rest of that with-body, then execution can resume after it. Source failure, invalid EOF, and cancellation remain terminal even when a manager returns a suppression value. An exit method can still raise a replacement exception, as with native Python contexts. A successful explicit `aclose()` leaves state `"aborted"` and no invented error.
+Operations spanning an open streaming block must run in the task that opened it, including `finish()` and `aclose()`. Ordinary body exceptions follow native context-manager suppression: suppression skips the rest of that with-body, then execution can resume after it. Source failure, invalid EOF, and cancellation remain terminal even when a manager returns a suppression value. An exit method can still raise a replacement exception, as with native Python contexts. Successfully closing an open executor leaves state `"aborted"` without inventing an error. Closing an already terminal executor leaves its state unchanged.
 
-The current diagnostic model is useful when its distinctions are explicit:
+Diagnostics describe accepted source and execution progress:
 
 | Field | Meaning |
 | --- | --- |
