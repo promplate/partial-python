@@ -41,7 +41,7 @@ Reuse the namespace with a new executor for another logical model response. Bind
 | `IF` | Stream stable statements in the selected `if` / `elif` / `else` suite. Each reached condition is evaluated once. |
 | `WITH` | Enter synchronous contexts once, stream their stable bodies, and exit when the block closes. |
 | `ASYNC_WITH` | The same behavior with awaited context entry and exit. |
-| `ALL` | The default: exactly `MODULE | IF | WITH | ASYNC_WITH`; no unimplemented block kinds. |
+| `ALL` | The default: exactly `MODULE \| IF \| WITH \| ASYNC_WITH`; no unimplemented block kinds. |
 
 Disable flags using bitwise AND with their complement: `ALL & ~ASYNC_WITH`, or `ALL & ~(WITH | ASYNC_WITH)` to hold both context kinds. Use `MODULE` for top-level-only streaming. `NONE` and `ALL & ~MODULE` both select whole-module execution.
 
