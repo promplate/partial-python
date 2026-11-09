@@ -7,7 +7,7 @@ from contextvars import ContextVar
 
 import pytest
 
-from partial_python import Executor
+from partial_python import MODULE, Executor
 
 
 async def numbers():
@@ -113,7 +113,7 @@ async def test_async_with_and_async_for_else_wait_for_real_eof():
     else:
         calls.append('else')
 """
-    executor = Executor({"manager": manager, "numbers": numbers, "double": double, "calls": calls})
+    executor = Executor({"manager": manager, "numbers": numbers, "double": double, "calls": calls}, stream_blocks=MODULE)
     for character in source:
         assert await executor.feed(character) == ()
     assert calls == []

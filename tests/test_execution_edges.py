@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from partial_python import Executor, UnsupportedSyntaxError, incremental_exec
+from partial_python import MODULE, Executor, UnsupportedSyntaxError, incremental_exec
 
 
 async def test_closing_stream_closes_its_source_iterator():
@@ -277,7 +277,7 @@ async def test_source_swallowing_cancellation_into_eof_cannot_seal_pending_compo
             return
 
     source = chunks()
-    stream = Executor({"calls": calls}).stream(source)
+    stream = Executor({"calls": calls}, stream_blocks=MODULE).stream(source)
     task = asyncio.create_task(anext(stream))
     try:
         await asyncio.wait_for(entered.wait(), 1)

@@ -2,6 +2,8 @@
 
 Execute append-only Python while source is still arriving. Python 3.11+, no runtime dependencies. Experimental API.
 
+> The block-streaming API and `aclose()` below are unreleased; they are not in the published `0.1.0a2` release.
+
 ```sh
 uv add 'partial-python==0.1.0a2'
 ```
@@ -24,7 +26,29 @@ await executor.finish()  # Successful EOF permits baz.
 
 `feed()` accepts new text deltas, not accumulated snapshots. `feed()` and `finish()` return completed `Execution` events. The executor retains `events`, `failed_unit`, sealed but unstarted `queued` units, and an immutable `parser_state` snapshot containing the unsealed `pending` tail. Read results from `executor.namespace`.
 
-`finish()` declares successful source completion. On disconnects, token limits, cancellation, or failed responses, use `abort()` for an idle executor; cancel and await an active operation first. Failure is terminal: earlier effects remain, later units do not start, and nothing is retried. [Lifecycle and integration](docs/api.md).
+`finish()` declares successful source completion. On disconnects, token limits, cancellation, or failed responses, use `await executor.aclose()` to abandon pending source and release open contexts. `abort()` is a synchronous alternative when no context is open; cancel and await an active operation first. Failure is terminal: earlier effects remain, later units do not start, and nothing is retried. [Lifecycle and integration](docs/api.md).
+
+## Streaming blocks
+
+`Executor` and `incremental_exec` accept `stream_blocks`, defaulting to `ALL`. `Block` is a `Flag`; `NONE`, `MODULE`, `IF`, `WITH`, `ASYNC_WITH`, and `ALL` are its aliases, exported from both `partial_python` and `partial_python.blocks`.
+
+```python
+from partial_python import ALL, ASYNC_WITH, MODULE, NONE, WITH, Executor
+
+executor = Executor()  # ALL: stream all supported block kinds.
+without_async_contexts = Executor(stream_blocks=ALL & ~ASYNC_WITH)
+without_contexts = Executor(stream_blocks=ALL & ~(WITH | ASYNC_WITH))
+top_level_only = Executor(stream_blocks=MODULE)
+whole_module = Executor(stream_blocks=NONE)
+```
+
+The argument **replaces** the selection; it does not extend the default. Include `MODULE` to execute before EOF. Without it, even with another flag selected, the executor buffers the whole source and compiles it once at successful EOF. `NONE` is the explicit whole-module mode.
+
+`IF`, `WITH`, and `ASYNC_WITH` allow executing stable statements inside those blocks before the enclosing block closes. Conditions and context headers execute once. `ALL` is exactly `MODULE | IF | WITH | ASYNC_WITH`; it does not opt into unsupported compound kinds. Loops, `try`, `match`, functions, and classes still require their complete statement.
+
+A context can stay open while more source arrives. With `ASYNC_WITH`, an `asyncio.timeout(...)` includes time spent waiting for later source; locks and transactions can also span generation. Disable a flag with `& ~` when that lifetime is unsuitable, or select `MODULE` to hold every compound until it closes. Operations spanning an open context must use the same caller task.
+
+An early body effect does **not** emit an `Execution` event. Events still represent completed top-level units. A failed or abandoned block can therefore have effects without a completed event, and those effects are never replayed or rolled back.
 
 ## Async text iterators
 
@@ -39,6 +63,8 @@ namespace = await incremental_exec(validated_deltas, {"foo": foo, "bar": bar})
 Execution starts while source is arriving; the await completes after execution and returns the namespace used. To consume events as each unit completes, use `Executor.stream()` and retain the executor for diagnostics. Close a partially consumed event iterator with `aclosing` in its owning task/context. [Streaming adapter](docs/api.md#stateful-streaming).
 
 ## Stable boundaries
+
+These are the boundaries exposed by `Parser` and by `stream_blocks=MODULE`. The default `ALL` permits earlier body effects in supported blocks without changing the completed top-level units.
 
 | Input | Execution boundary |
 | --- | --- |
@@ -68,7 +94,7 @@ The default returns only the stable prefix. `Allow` flags opt into provisional d
 
 Units share one namespace and support native top-level `await`. Execution requires an asyncio event loop; use the asyncio backend with AnyIO. `Parser` and `complete` are synchronous.
 
-This uses sequential compilation units, with [explicit differences from whole-module execution](docs/semantics.md#execution-is-a-sequence-of-compilation-units). Future imports remain in the prologue, only the initial string sets the module docstring, and module-scope `global` declarations are rejected. On Python 3.14+, module annotations require an explicit `from __future__ import annotations`.
+With `MODULE` enabled, execution uses sequential compilation units, with [explicit differences from whole-module execution](docs/semantics.md#execution-is-a-sequence-of-compilation-units). Future imports remain in the prologue, only the initial string sets the module docstring, and module-scope `global` declarations are rejected. On Python 3.14+, module annotations require an explicit `from __future__ import annotations`. Choose `NONE` for native whole-module `global` and deferred-annotation semantics.
 
 In-process execution provides no sandbox or rollback. Hosts own permissions, background tasks, source limits, and hard deadlines. The [integration examples](docs/api.md#host-examples) demonstrate transport completion, concurrent reception, and traceback source lifetime.
 

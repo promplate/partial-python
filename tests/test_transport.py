@@ -7,7 +7,7 @@ import pytest
 from examples import overlap
 from examples import transport as example
 from examples.transport import SourceAborted, SourceProtocolError, execute_connection, record_bytes, source_deltas
-from partial_python import Executor, incremental_exec
+from partial_python import MODULE, Executor, incremental_exec
 
 
 def reader_for(*records):
@@ -57,7 +57,7 @@ async def test_final_source_rewrite_rejected_before_sealing_pending_suite():
     reader = reader_for({"type": "delta", "text": source}, {"type": "done", "status": "completed", "source": source + "# rewritten"})
     calls = []
     with pytest.raises(SourceProtocolError, match="does not match"):
-        await incremental_exec(source_deltas(reader), {"calls": calls})
+        await incremental_exec(source_deltas(reader), {"calls": calls}, stream_blocks=MODULE)
     # A final consistency check cannot roll back the previously committed call.
     assert calls == ["early"]
 

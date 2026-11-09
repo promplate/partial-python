@@ -7,7 +7,7 @@ from contextvars import ContextVar
 
 import pytest
 
-from partial_python import Executor, UnsupportedSyntaxError, incremental_exec
+from partial_python import MODULE, Executor, UnsupportedSyntaxError, incremental_exec
 
 
 async def test_executes_closed_await_before_receiving_more_source():
@@ -51,7 +51,7 @@ async def test_entire_loop_waits_for_successor_including_else():
 async def test_normal_eof_seals_compound_but_abort_does_not():
     for finish in (True, False):
         calls = []
-        executor = Executor({"calls": calls})
+        executor = Executor({"calls": calls}, stream_blocks=MODULE)
         await executor.feed("if True:\n    calls.append(1)\n")
         assert calls == []
         if finish:
@@ -347,7 +347,7 @@ async def test_transport_failure_does_not_finalize_pending_compound():
             closed.append(True)
 
     with pytest.raises(ConnectionError) as captured:
-        await incremental_exec(chunks(), {"calls": calls})
+        await incremental_exec(chunks(), {"calls": calls}, stream_blocks=MODULE)
     assert captured.value is failure
     assert calls == [1] and closed == [True]
 

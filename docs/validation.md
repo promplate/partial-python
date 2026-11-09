@@ -26,10 +26,10 @@ Corpus decoding uses `tokenize.open`, which normalizes newlines. Separate fixtur
 
 ## Execution and host integration
 
-Execution tests cover ordering, terminal failure/cancellation, compiler context, source diagnostics, and iterator/task ownership. The [host examples](api.md#host-examples) have tests for real loopback sockets, bounded reception, task cleanup, and persistent traceback source. These controlled fixtures verify behavior; they are not model evaluations or evidence of improved CodeAct performance.
+Execution tests cover ordering, terminal failure/cancellation, compiler context, source diagnostics, and iterator/task ownership. Block tests compare native execution across source partitions and cover default `ALL`, flag exclusions, early effects without replay, exception suppression, and cleanup. Gated sources and real `asyncio.timeout()` verify effects and context lifetimes before EOF. The [host examples](api.md#host-examples) have tests for real loopback sockets, bounded reception, task cleanup, and persistent traceback source. These controlled fixtures verify behavior; they are not model evaluations or evidence of improved CodeAct performance.
 
 ## Performance and packaging
 
 Work-count regressions cover deferred buffer joining, geometric probe windows, delimiter checkpoints, and escape-aware string retry gates. No general linear-time guarantee is made: growing multiline suites, frequent unescaped candidate closers, malformed input, or repeatedly reading the entire growing `pending` value can still incur repeated work. Benchmark representative inputs before changing those optimizations; do not weaken commit boundaries to meet a timing target.
 
-Before release, build and install both wheel and sdist in isolated environments outside the checkout. Verify installed source against the checkout, `py.typed`, zero runtime dependencies, preview behavior, early awaits, compound holdback, and failure cleanup on the oldest and newest supported interpreters.
+Before release, build and install both wheel and sdist in isolated environments outside the checkout. Verify installed source against the checkout, `py.typed`, zero runtime dependencies, preview behavior, early awaits, selected block streaming, compound holdback, and failure cleanup on the oldest and newest supported interpreters.

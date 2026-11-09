@@ -6,11 +6,13 @@
 
 Let `P` be the source received so far and `C` the source already committed. `C` is an exact, contiguous prefix of `P`: no inserted quotes, brackets, `pass`, indentation, or newlines. For every suffix `S` for which `P + S` is valid under the stream's Python grammar, the committed top-level statements remain an unchanged prefix of its statement AST. Source locations may be translated when comparing standalone slices.
 
-This promise concerns the structure of statements, not every observable property of compiling their surrounding module. Invalid later source cannot retract effects that already happened. An append-only producer cannot revise an earlier token; edits require a new stream.
+This promise concerns completed top-level units returned by `Parser` and recorded as execution events. Block streaming can execute stable inner statements before their enclosing top-level unit is committed, so `C` is not an execution watermark. The promise concerns statement structure, not every observable property of compiling the surrounding module. Invalid later source cannot retract effects that already happened. An append-only producer cannot revise an earlier token; edits require a new stream.
 
 `feed()` means more characters may arrive. Only `finish()` declares actual EOF. A dropped connection, cancellation, length limit, or failed model response must abort the stream instead of calling `finish()`. A normal async-iterator end is therefore appropriate only when the adapter knows the source completed successfully.
 
 ## Boundaries
+
+These are `Parser` boundaries and the `stream_blocks=MODULE` execution boundaries.
 
 | Source received | Reason to wait |
 | --- | --- |
@@ -25,7 +27,7 @@ This promise concerns the structure of statements, not every observable property
 | `@decorate` | Decorators belong to the following definition. |
 | A compound followed by the character `e` | The token may still become `else`, `elif`, or `except`. |
 
-A real logical newline seals a top-level simple statement. All semicolon-separated statements on that line are one execution unit. A compound waits for a real, unambiguous top-level successor or explicit EOF. Blank lines and comments do not close suites. One-line compound suites obey the same rule because their continuation clauses can still arrive later.
+A real logical newline seals a top-level simple statement. All semicolon-separated statements on that line are one execution unit. A completed compound unit waits for a real, unambiguous top-level successor or explicit EOF. Blank lines and comments do not close suites. One-line compound suites obey the same rule because their continuation clauses can still arrive later.
 
 The standard tokenizer creates virtual `NEWLINE` and `DEDENT` tokens at EOF. A parser repeatedly run against a growing buffer therefore reports apparent closures that are not stream boundaries. Likewise, `codeop.compile_command(..., symbol="exec")` accepts a loop whose body can still grow. Neither result alone proves append stability. Python's [lexical rules](https://docs.python.org/3.14/reference/lexical_analysis.html#indentation) and [compound grammar](https://docs.python.org/3.14/reference/compound_stmts.html) explain these distinctions.
 
@@ -33,7 +35,9 @@ All three Python newline conventions are accepted. CRLF remains one physical new
 
 ## Execution is a sequence of compilation units
 
-Execution shares one globals dictionary and runs units sequentially, including top-level `await`. Every compound stays in a single unit, so loops, exception handlers, context managers, function bodies, and class bodies retain their ordinary internal control flow. There is no implicit task parallelism.
+Execution shares one globals dictionary and runs sequentially, including top-level `await`. The default `ALL` permits stable body statements inside `IF`, `WITH`, and `ASYNC_WITH` to run before those blocks close; loops, exception handlers, function and class definitions remain complete units. Select `MODULE` to execute every compound as a complete unit with native internal control flow. There is no implicit task parallelism.
+
+Without `MODULE` in the selection, including `NONE`, the executor buffers the entire source and compiles it once at successful EOF. This mode retains native module-scope `global` and deferred-annotation behavior. The incremental-compilation restrictions below apply when `MODULE` is enabled.
 
 It is impossible to guarantee arbitrary whole-module equivalence while executing before EOF. These executable counterexamples matter even when lexical boundaries are correct:
 
@@ -52,7 +56,7 @@ b = (1000, 2000)
 same = a is b
 ```
 
-Whole-module constant pooling can produce different object identity from separately compiled units. Frame inspection, code-object constants, tracing, and compilation audit events can also observe the unit boundaries. Programs that depend on those observations must use ordinary whole-module execution.
+Whole-module constant pooling can produce different object identity from separately compiled units. Frame inspection, code-object constants, tracing, and compilation audit events can also observe the unit boundaries. Programs that depend on compilation-unit boundaries should select `NONE` or use ordinary whole-module execution.
 
 Other deliberate rules address common accidental differences:
 
@@ -65,11 +69,19 @@ Compiler warnings can be emitted by speculative AST probes as well as final comp
 
 These distinctions follow the documented [future/global rules](https://docs.python.org/3.14/reference/simple_stmts.html#future), [interactive compiler state](https://docs.python.org/3.14/library/codeop.html), and [AST compilation caveat](https://docs.python.org/3.14/library/ast.html#ast.parse).
 
+## Streaming selected block bodies
+
+Block streaming retains execution state rather than rerunning a growing source snapshot. An `if` condition is evaluated once when reached; later `elif` and `else` clauses cannot rerun a taken branch. A context header enters each manager once, and successful closure exits managers in reverse order. A suppressed body exception exits that with-statement and skips its remaining body.
+
+Open blocks retain the caller task. A context stays active during source waits, so `asyncio.timeout(...)`, locks, context variables, and transactions also span those waits. These observable lifetimes are part of the default `ALL` behavior. Disable selected kinds with `ALL & ~ASYNC_WITH` or `ALL & ~(WITH | ASYNC_WITH)`, or select `MODULE` to hold all compounds. Source reception is not isolated in a hidden task. Continue or close an open block from the same task; `await executor.aclose()` releases contexts without completing pending source, while synchronous `abort()` rejects open contexts.
+
+Events still acknowledge only completed top-level units. A partial body can have irreversible effects with no event, and later invalid source cannot undo them. Flags select supported scopes; they do not enable loops, `try`, `match`, or definition bodies, and they never authorize repaired source. See [block selection](api.md#block-selection) for the exact mask and API.
+
 ## Failures, cancellation, and effects
 
-A completed event means that execution of its unit returned normally. Its timestamps and original source range identify that unit. If compilation, execution, or awaiting raises, the executor becomes terminal. Ordinary Python exception and coroutine rules apply. Earlier effects remain. The failing unit may already have performed effects before it raised; cancellation has the same limitation. No implicit retry is safe.
+A completed event means that execution of its unit returned normally. Its timestamps and original source range identify that unit. If a compilation or runtime exception escapes the active Python contexts, the executor becomes terminal. Source failure, invalid EOF, and cancellation are terminal even if an open manager returns a suppression value. Ordinary Python exception and coroutine rules apply. Earlier effects remain. The failing unit may already have performed effects before it raised; cancellation has the same limitation. No implicit retry is safe.
 
-An ordinary source-cleanup error does not replace an execution failure already in flight; it is attached as a best-effort exception note. A new cancellation or process-level exception during cleanup does propagate and becomes `executor.error`; Python’s native `__context__` chain retains the earlier failure. Hosts should retain or render the full exception chain, not only the terminal message.
+Open context exits retain native exception replacement, including `asyncio.timeout` converting its cancellation to `TimeoutError`. An ordinary source-iterator cleanup error does not replace an execution failure already in flight; it is attached as a best-effort exception note. A new cancellation or process-level exception during cleanup does propagate and becomes `executor.error`; Python’s native `__context__` chain retains the earlier failure. Hosts should retain or render the full exception chain, not only the terminal message.
 
 Iterator control exceptions keep Python’s native behavior. `StopIteration` escaping a coroutine becomes `RuntimeError`; `StopAsyncIteration` raised by executed code becomes `RuntimeError` at the event-stream boundary rather than successful source exhaustion. Its original instance remains in `executor.error` and the propagated exception’s `__cause__`. Conversely, Python’s [`agen.aclose()` protocol](https://docs.python.org/3.14/reference/expressions.html#agen.aclose) consumes a propagated `GeneratorExit`, even one originating in a source closer; the executor still records that cleanup failure. A `GeneratorExit` from source acquisition, reading, or executed code is a failure, distinct from a consumer closing at an event yield.
 
