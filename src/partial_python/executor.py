@@ -140,7 +140,7 @@ class Executor:
     Concurrent or recursive writes are rejected rather than silently reordered.
     """
 
-    def __init__(self, namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>", stream_blocks: Block = Block.MODULE):
+    def __init__(self, namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>", stream_blocks: Block = Block.ALL):
         if not isinstance(stream_blocks, Block):
             raise TypeError("stream_blocks must be a Block member or combination")
         self._stream_blocks = stream_blocks
@@ -624,7 +624,7 @@ class Executor:
                 self._busy = False
 
 
-async def incremental_exec(chunks: AsyncIterable[str], namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>", stream_blocks: Block = Block.MODULE) -> dict[str, Any]:
+async def incremental_exec(chunks: AsyncIterable[str], namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>", stream_blocks: Block = Block.ALL) -> dict[str, Any]:
     """Execute validated source as it arrives and return the namespace used.
 
     Normal iterator exhaustion authorizes EOF. The source adapter must raise on

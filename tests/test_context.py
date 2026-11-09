@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from partial_python import Executor, UnsupportedSyntaxError
+from partial_python import MODULE, Executor, UnsupportedSyntaxError
 
 
 def execute_native(source, namespace=None):
@@ -289,7 +289,7 @@ async def test_deep_compound_keeps_all_nested_effects_until_successor():
     native_calls = []
     execute_native(source, {"calls": native_calls})
     calls = []
-    executor = Executor({"calls": calls})
+    executor = Executor({"calls": calls}, stream_blocks=MODULE)
     for line in lines:
         await executor.feed(line)
         assert calls == []

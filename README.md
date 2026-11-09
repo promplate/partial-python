@@ -30,21 +30,23 @@ await executor.finish()  # Successful EOF permits baz.
 
 ## Streaming blocks
 
-`Executor` and `incremental_exec` accept `stream_blocks`, defaulting to `MODULE`. `Block` is a `Flag`; `NONE`, `MODULE`, `IF`, `WITH`, `ASYNC_WITH`, and `ALL` are its aliases, exported from both `partial_python` and `partial_python.blocks`.
+`Executor` and `incremental_exec` accept `stream_blocks`, defaulting to `ALL`. `Block` is a `Flag`; `NONE`, `MODULE`, `IF`, `WITH`, `ASYNC_WITH`, and `ALL` are its aliases, exported from both `partial_python` and `partial_python.blocks`.
 
 ```python
-from partial_python import ALL, IF, MODULE, NONE, WITH, Executor
+from partial_python import ALL, ASYNC_WITH, MODULE, NONE, WITH, Executor
 
-executor = Executor(stream_blocks=MODULE | IF | WITH)
+executor = Executor()  # ALL: stream all supported block kinds.
+without_async_contexts = Executor(stream_blocks=ALL & ~ASYNC_WITH)
+without_contexts = Executor(stream_blocks=ALL & ~(WITH | ASYNC_WITH))
+top_level_only = Executor(stream_blocks=MODULE)
 whole_module = Executor(stream_blocks=NONE)
-all_supported = Executor(stream_blocks=ALL)
 ```
 
 The argument **replaces** the selection; it does not extend the default. Include `MODULE` to execute before EOF. Without it, even with another flag selected, the executor buffers the whole source and compiles it once at successful EOF. `NONE` is the explicit whole-module mode.
 
-`IF`, `WITH`, and `ASYNC_WITH` opt into executing stable statements inside those blocks before the enclosing block closes. Conditions and context headers execute once. `ALL` is exactly `MODULE | IF | WITH | ASYNC_WITH`; it does not opt into unsupported compound kinds. Loops, `try`, `match`, functions, and classes still require their complete statement.
+`IF`, `WITH`, and `ASYNC_WITH` allow executing stable statements inside those blocks before the enclosing block closes. Conditions and context headers execute once. `ALL` is exactly `MODULE | IF | WITH | ASYNC_WITH`; it does not opt into unsupported compound kinds. Loops, `try`, `match`, functions, and classes still require their complete statement.
 
-A context can stay open while more source arrives. With `ASYNC_WITH`, an `asyncio.timeout(...)` includes time spent waiting for later source; locks and transactions can also span generation. This is why `MODULE` remains the default. Operations spanning an open context must use the same caller task.
+A context can stay open while more source arrives. With `ASYNC_WITH`, an `asyncio.timeout(...)` includes time spent waiting for later source; locks and transactions can also span generation. Disable a flag with `& ~` when that lifetime is unsuitable, or select `MODULE` to hold every compound until it closes. Operations spanning an open context must use the same caller task.
 
 An early body effect does **not** emit an `Execution` event. Events still represent completed top-level units. A failed or abandoned block can therefore have effects without a completed event, and those effects are never replayed or rolled back.
 
@@ -62,7 +64,7 @@ Execution starts while source is arriving; the await completes after execution a
 
 ## Stable boundaries
 
-These are the default `MODULE` boundaries and the boundaries exposed by `Parser`. Opting into block streaming permits earlier body effects without changing the completed top-level units.
+These are the boundaries exposed by `Parser` and by `stream_blocks=MODULE`. The default `ALL` permits earlier body effects in supported blocks without changing the completed top-level units.
 
 | Input | Execution boundary |
 | --- | --- |

@@ -22,9 +22,9 @@ A validated iterator ends normally only after authoritative successful generatio
 
 ## Namespace and results
 
-`Executor(namespace=None, *, filename="<partial-python>", stream_blocks=MODULE)` uses a supplied dictionary as-is. Without one, it creates a namespace with `__name__ = "__main__"`. Include that binding explicitly when a supplied namespace should behave as a script. No module is registered in `sys.modules`.
+`Executor(namespace=None, *, filename="<partial-python>", stream_blocks=ALL)` uses a supplied dictionary as-is. Without one, it creates a namespace with `__name__ = "__main__"`. Include that binding explicitly when a supplied namespace should behave as a script. No module is registered in `sys.modules`.
 
-`await incremental_exec(validated_deltas, namespace=None, *, filename="<partial-python>", stream_blocks=MODULE)` follows the same namespace rules and returns that exact dictionary on success. It executes while source arrives; the await finishes only after execution and source cleanup complete. Keep an `Executor` when you need diagnostics after failure; use its `stream()` when you also need events as each unit completes.
+`await incremental_exec(validated_deltas, namespace=None, *, filename="<partial-python>", stream_blocks=ALL)` follows the same namespace rules and returns that exact dictionary on success. It executes while source arrives; the await finishes only after execution and source cleanup complete. Keep an `Executor` when you need diagnostics after failure; use its `stream()` when you also need events as each unit completes.
 
 Each `Execution` records its index, original completed top-level `unit`, and monotonic `started_at` / `completed_at` times. Streaming a body can cause effects before any event exists; its enclosing top-level unit emits only on successful completion. It does not capture expression results or stdout. Assign results in source (`result = await foo()`) and read them from `executor.namespace`.
 
@@ -37,11 +37,13 @@ Reuse the namespace with a new executor for another logical model response. Bind
 | Option | Effect |
 | --- | --- |
 | `NONE` | Buffer the whole module and compile it once at successful EOF. |
-| `MODULE` | Execute complete top-level units as they arrive; this is the default. |
+| `MODULE` | Execute complete top-level units as they arrive, holding all compound bodies until closure. |
 | `IF` | Stream stable statements in the selected `if` / `elif` / `else` suite. Each reached condition is evaluated once. |
 | `WITH` | Enter synchronous contexts once, stream their stable bodies, and exit when the block closes. |
 | `ASYNC_WITH` | The same behavior with awaited context entry and exit. |
-| `ALL` | Exactly `MODULE | IF | WITH | ASYNC_WITH`; no unimplemented block kinds. |
+| `ALL` | The default: exactly `MODULE | IF | WITH | ASYNC_WITH`; no unimplemented block kinds. |
+
+Disable flags using bitwise AND with their complement: `ALL & ~ASYNC_WITH`, or `ALL & ~(WITH | ASYNC_WITH)` to hold both context kinds. Use `MODULE` for top-level-only streaming, and `NONE` (equivalently, `ALL & ~MODULE`) for whole-module execution.
 
 `stream_blocks` replaces the default selection. `MODULE | IF` enables top-level and conditional streaming; `IF` alone does not. Streaming also requires enabled ancestors: `MODULE | IF` cannot stream an `if` nested inside an unselected `with` or a loop. Every selection without `MODULE` buffers and compiles the whole module at EOF, preserving native module-scope `global` declarations and Python 3.14 deferred annotations. Whole-module mode emits one `Execution` even for empty input, which still initializes a missing `__builtins__` binding as native `exec("")` does. `stream_blocks` rejects integers, booleans, and preview `Allow` values. The executor exposes the selected value as its read-only `stream_blocks` property.
 
@@ -55,7 +57,7 @@ assert effects == ["early"]  # Body effects precede the completed top-level even
 assert len(await executor.finish()) == 1
 ```
 
-`ALL` is opt-in because open contexts span source reception. A real `asyncio.timeout(...)` can expire while the executor awaits the next source chunk; the default `MODULE` has not entered that context yet. Locks, context variables, and transactions likewise retain their lifetime until the block closes. `for`, `while`, `try`, `match`, function and class definitions still wait for their complete statement.
+With the default `ALL`, open contexts span source reception. A real `asyncio.timeout(...)` can expire while the executor awaits the next source chunk; selecting `MODULE` holds that entire context until its source closes. Locks, context variables, and transactions likewise retain their lifetime until the block closes. `for`, `while`, `try`, `match`, function and class definitions still wait for their complete statement.
 
 ## Lifecycle and diagnostics
 
@@ -77,7 +79,7 @@ The current diagnostic model is useful when its distinctions are explicit:
 | `error` | The recorded terminal failure; rejected later calls must not replace it. Native generator control exceptions may be wrapped when propagated; see [exception semantics](semantics.md#failures-cancellation-and-effects). |
 | `state` | `ExecutorState`: `"open"`, `"finished"`, `"failed"`, or `"aborted"`. |
 
-A `CodeUnit` represents an exact source span; the API or field returning it determines whether that span is a completed top-level unit. With the default `MODULE`, successful events plus the failed range, queued ranges and pending tail preserve the accepted source after a mid-chunk failure. With block streaming, an unsealed pending range may already have effects, and inner failure ranges can overlap it; these fields are diagnostics, not a resumable execution offset. Syntax errors retain the original filename and line numbers. Cooperative cancellation is terminal, including when a producer or statement catches `CancelledError` without clearing the new cancellation request. This is not a hard deadline for code that loops forever or deliberately removes cancellation state.
+A `CodeUnit` represents an exact source span; the API or field returning it determines whether that span is a completed top-level unit. With `stream_blocks=MODULE`, successful events plus the failed range, queued ranges and pending tail preserve the accepted source after a mid-chunk failure. With block streaming, an unsealed pending range may already have effects, and inner failure ranges can overlap it; these fields are diagnostics, not a resumable execution offset. Syntax errors retain the original filename and line numbers. Cooperative cancellation is terminal, including when a producer or statement catches `CancelledError` without clearing the new cancellation request. This is not a hard deadline for code that loops forever or deliberately removes cancellation state.
 
 Catching `CancelledError` can let a unit run its remaining body, assign its result, and return normally. Without `uncancel()`, the outstanding new cancellation still causes `failed_unit` and no success event. The event journal is an acknowledgement record, not a rollback log or proof that an unacknowledged unit had no effects.
 

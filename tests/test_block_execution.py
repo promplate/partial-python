@@ -39,7 +39,7 @@ class AsyncScope(Scope):
 
 
 @pytest.mark.parametrize("options", [{}, {"stream_blocks": MODULE}])
-async def test_default_and_explicit_module_keep_existing_top_level_boundaries(options):
+async def test_default_and_explicit_module_keep_loops_opaque(options):
     effects = []
     executor = Executor({"effects": effects}, **options)
     first = await executor.feed("effects.append('first')\n")
@@ -51,10 +51,71 @@ async def test_default_and_explicit_module_keep_existing_top_level_boundaries(op
     assert [event.index for event in executor.events] == [0, 1]
 
 
-async def test_none_buffers_and_executes_one_module_in_the_caller_namespace():
+@pytest.mark.parametrize("options", [{}, {"stream_blocks": ALL}], ids=["default", "all"])
+async def test_default_streams_each_supported_block_once(options):
+    effects = []
+    sync_scope, async_scope = Scope(effects, "sync"), AsyncScope(effects, "async")
+
+    def condition():
+        effects.append("condition")
+        return True
+
+    executor = Executor({"effects": effects, "condition": condition, "sync_scope": sync_scope, "async_scope": async_scope}, **options)
+    assert executor.stream_blocks == ALL
+    source = "if condition():\n    with sync_scope:\n        async with async_scope:\n            effects.append('first')\n"
+    for character in source:
+        assert await executor.feed(character) == ()
+    assert effects == ["condition", ("enter", "sync"), ("enter", "async"), "first"]
+    assert sync_scope.exits == async_scope.exits == []
+    assert await executor.feed("            effects.append('second')\n") == ()
+    assert effects[-1] == "second" and executor.events == ()
+    events = await executor.feed("effects.append('after')\n")
+    assert [event.index for event in events] == [0, 1]
+    assert effects == ["condition", ("enter", "sync"), ("enter", "async"), "first", "second", ("exit", "async"), ("exit", "sync"), "after"]
+    assert sync_scope.exits == async_scope.exits == [None]
+    assert sync_scope.tasks == async_scope.tasks == [asyncio.current_task()] * 2
+    assert await executor.finish() == ()
+
+
+@pytest.mark.parametrize("options", [{}, {"stream_blocks": ALL}], ids=["default", "all"])
+async def test_incremental_exec_default_streams_before_source_exhaustion(options):
+    effects = []
+    scope = AsyncScope(effects)
+
+    async def chunks():
+        yield "if True:\n    async with scope:\n        effects.append('first')\n"
+        assert effects == [("enter", "scope"), "first"] and scope.exits == []
+        yield "        effects.append('second')\n"
+        assert effects == [("enter", "scope"), "first", "second"] and scope.exits == []
+
+    namespace = {"effects": effects, "scope": scope}
+    assert await incremental_exec(chunks(), namespace, **options) is namespace
+    assert effects == [("enter", "scope"), "first", "second", ("exit", "scope")]
+    assert scope.exits == [None]
+
+
+@pytest.mark.parametrize("stream_blocks", [ALL & ~ASYNC_WITH, ALL & ~(WITH | ASYNC_WITH)], ids=["without-async-with", "without-contexts"])
+@pytest.mark.parametrize("scope_type,keyword,flag", [(Scope, "with", WITH), (AsyncScope, "async with", ASYNC_WITH)])
+async def test_excluded_contexts_wait_for_closure_while_if_still_streams(stream_blocks, scope_type, keyword, flag):
+    effects = []
+    scope = scope_type(effects)
+    executor = Executor({"effects": effects, "scope": scope}, stream_blocks=stream_blocks)
+    source = f"if True:\n    effects.append('before')\n    {keyword} scope:\n        effects.append('inside')\n"
+    assert await executor.feed(source) == ()
+    assert effects == (["before", ("enter", "scope"), "inside"] if flag in stream_blocks else ["before"])
+    assert scope.exits == [] and executor.events == ()
+    assert await executor.feed("    effects.append('after-context')\n") == ()
+    assert effects == ["before", ("enter", "scope"), "inside", ("exit", "scope"), "after-context"]
+    assert scope.exits == [None]
+    assert len(await executor.finish()) == 1
+    assert scope.tasks == [asyncio.current_task()] * 2
+
+
+@pytest.mark.parametrize("stream_blocks", [NONE, ALL & ~MODULE], ids=["none", "without-module"])
+async def test_without_module_buffers_and_executes_one_module_in_the_caller_namespace(stream_blocks):
     effects = []
     namespace = {"effects": effects, "value": 40}
-    executor = Executor(namespace, stream_blocks=NONE)
+    executor = Executor(namespace, stream_blocks=stream_blocks)
     source = "global value\nvalue += 2\neffects.append(value)\n"
     for character in source:
         assert await executor.feed(character) == ()
@@ -66,18 +127,20 @@ async def test_none_buffers_and_executes_one_module_in_the_caller_namespace():
     assert executor.events == events and executor.state == "finished"
 
 
-async def test_none_compiles_all_source_before_any_effect():
+@pytest.mark.parametrize("stream_blocks", [NONE, ALL & ~MODULE], ids=["none", "without-module"])
+async def test_without_module_compiles_all_source_before_any_effect(stream_blocks):
     effects = []
-    executor = Executor({"effects": effects}, stream_blocks=NONE)
+    executor = Executor({"effects": effects}, stream_blocks=stream_blocks)
     assert await executor.feed("effects.append('never')\nglobal effects\n") == ()
     with pytest.raises(SyntaxError):
         await executor.finish()
     assert effects == [] and executor.events == () and executor.state == "failed"
 
 
-async def test_none_preserves_module_future_and_docstring_semantics():
+@pytest.mark.parametrize("stream_blocks", [NONE, ALL & ~MODULE], ids=["none", "without-module"])
+async def test_without_module_preserves_module_future_and_docstring_semantics(stream_blocks):
     namespace = {}
-    executor = Executor(namespace, stream_blocks=NONE)
+    executor = Executor(namespace, stream_blocks=stream_blocks)
     source = '"whole module"\nfrom __future__ import annotations\nvalue: Missing = 3\n"later expression"\n'
     for line in source.splitlines(keepends=True):
         assert await executor.feed(line) == ()
@@ -268,7 +331,8 @@ async def test_unsuppressed_body_failure_closes_context_without_replaying_prefix
 
 
 @pytest.mark.parametrize("scope_type,keyword", [(Scope, "with"), (AsyncScope, "async with")])
-async def test_transport_failure_closes_open_context_and_cannot_be_suppressed_as_eof(scope_type, keyword):
+@pytest.mark.parametrize("options", [{}, {"stream_blocks": ALL}], ids=["default", "all"])
+async def test_transport_failure_closes_open_context_and_cannot_be_suppressed_as_eof(scope_type, keyword, options):
     effects, closed = [], []
     scope = scope_type(effects, suppress=(BaseException,))
     failure = OSError("source disconnected")
@@ -281,7 +345,7 @@ async def test_transport_failure_closes_open_context_and_cannot_be_suppressed_as
         finally:
             closed.append(True)
 
-    executor = Executor({"effects": effects, "scope": scope}, stream_blocks=ALL)
+    executor = Executor({"effects": effects, "scope": scope}, **options)
     with pytest.raises(OSError) as caught:
         async for _ in executor.stream(chunks()):
             pytest.fail("the incomplete context cannot emit a completed unit")
@@ -457,8 +521,8 @@ async def test_incremental_exec_rejects_wrong_options_before_pulling_source(inva
         await source.aclose()
 
 
-@pytest.mark.parametrize("options", [{}, {"stream_blocks": ALL}], ids=["module-default", "all"])
-async def test_real_asyncio_timeout_includes_source_wait_only_when_context_streaming_is_selected(options):
+@pytest.mark.parametrize("options,streamed", [({}, True), ({"stream_blocks": ALL}, True), ({"stream_blocks": ALL & ~ASYNC_WITH}, False)], ids=["default", "all", "without-async-with"])
+async def test_real_asyncio_timeout_includes_source_wait_only_when_context_streaming_is_selected(options, streamed):
     effects, closed = [], []
     waiting, release = asyncio.Event(), asyncio.Event()
     timeout = asyncio.timeout(None)
@@ -481,7 +545,7 @@ async def test_real_asyncio_timeout_includes_source_wait_only_when_context_strea
         await asyncio.wait_for(waiting.wait(), 1)
         assert executor.events == ()
         deadline = asyncio.get_running_loop().time() - 1
-        if options:
+        if streamed:
             assert effects == ["body"]
             # An explicit expired deadline cancels the owner at its next await;
             # there is no timing race or sleep-based guess about source progress.

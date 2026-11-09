@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from partial_python import Executor
+from partial_python import MODULE, Executor
 
 
 async def chunks_of(*chunks):
@@ -151,7 +151,7 @@ async def test_source_failure_records_error_without_finalizing_pending_suite():
         finally:
             closed.append(True)
 
-    executor = Executor()
+    executor = Executor(stream_blocks=MODULE)
     with pytest.raises(ConnectionError) as captured:
         async for _ in executor.stream(source()):
             pass
