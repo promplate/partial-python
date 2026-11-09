@@ -1,11 +1,9 @@
 # partial-python
 
-Execute append-only Python while source is still arriving. Python 3.11+, no runtime dependencies. Experimental API.
-
-> The block-streaming API and `aclose()` below are unreleased; they are not in the published `0.1.0a2` release.
+Execute append-only Python while source is still arriving. Python 3.11+, no runtime dependencies.
 
 ```sh
-uv add 'partial-python==0.1.0a2'
+uv add partial-python
 ```
 
 ## Input and completion

@@ -161,3 +161,7 @@ Run an example from a checkout with `uv run examples/<name>.py`. They are not in
 | [tracebacks](../examples/tracebacks.py) | Write original source before execution and retain the file while generated functions or tracebacks remain in use. |
 
 The traceback recipe writes UTF-8 without newline translation; it requires an absent or UTF-8 source encoding cookie, because traceback readers honor cookies even though `compile(str)` does not.
+
+## Compatibility
+
+Patch releases in `0.1.x` preserve the documented public API, defaults, flag meanings, and execution lifecycle. Names beginning with `_` are private.
