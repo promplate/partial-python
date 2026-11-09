@@ -9,11 +9,14 @@ import sys
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 from types import CodeType
 from typing import Any, Literal, cast
 
+from ._blocks import BlockEvent, BlockParser
+from ._contexts import Scope, compile_binding, reraise
+from .blocks import Block
 from .parser import _FUTURES, CodeUnit, Parser, _source_line, _tree
 
 
@@ -81,6 +84,54 @@ class _ModuleScope:
                 pending.extend(reversed(list(ast.iter_child_nodes(node))))
 
 
+class _ModuleParser(Parser):
+    """Buffer a whole compilation unit without speculative parsing or EOF repair."""
+
+    def feed(self, delta: str) -> tuple[CodeUnit, ...]:
+        self._ensure_open()
+        if not isinstance(delta, str):
+            raise TypeError("delta must be str")
+        if delta:
+            self._chunks.append(delta)
+        return ()
+
+    def finish(self) -> tuple[CodeUnit, ...]:
+        self._ensure_open()
+        self._closed = True
+        source = self.pending
+        self._pending = ""
+        return (self._statement(source),)
+
+
+@dataclass(slots=True)
+class _Frame:
+    started: float
+    active: bool
+    parent_active: bool
+    taken: bool = False
+    scopes: list[Scope] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _Evaluation:
+    value: Any = None
+    error: BaseException | None = None
+
+    def unwrap(self) -> Any:
+        if self.error is not None:
+            reraise(self.error)
+        return self.value
+
+
+def _has_frame(error: BaseException, code: CodeType) -> bool:
+    traceback = error.__traceback__
+    while traceback is not None:
+        if traceback.tb_frame.f_code is code:
+            return True
+        traceback = traceback.tb_next
+    return False
+
+
 class Executor:
     """One append-only execution stream sharing a caller-owned global namespace.
 
@@ -89,9 +140,21 @@ class Executor:
     Concurrent or recursive writes are rejected rather than silently reordered.
     """
 
-    def __init__(self, namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>"):
+    def __init__(self, namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>", stream_blocks: Block = Block.MODULE):
+        if not isinstance(stream_blocks, Block):
+            raise TypeError("stream_blocks must be a Block member or combination")
+        self._stream_blocks = stream_blocks
         self._namespace = namespace if namespace is not None else {"__name__": "__main__"}
-        self._parser = Parser(filename=filename)
+        self._parser: Parser | BlockParser
+        if Block.MODULE not in stream_blocks:
+            self._parser = _ModuleParser(filename=filename)
+        elif stream_blocks == Block.MODULE:
+            self._parser = Parser(filename=filename)
+        else:
+            self._parser = BlockParser(filename=filename, stream_blocks=stream_blocks)
+        self._frames: list[_Frame] = []
+        self._owner: asyncio.Task[Any] | None = None
+        self._started_block: int | None = None
         self._events: list[Execution] = []
         self._flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
         self._prologue = True
@@ -100,7 +163,11 @@ class Executor:
         self._state: ExecutorState = "open"
         self._failed_unit: CodeUnit | None = None
         self._error: BaseException | None = None
-        self._queued: deque[CodeUnit] = deque()
+        self._queued: deque[CodeUnit | BlockEvent] = deque()
+
+    @property
+    def stream_blocks(self) -> Block:
+        return self._stream_blocks
 
     @property
     def namespace(self) -> dict[str, Any]:
@@ -122,7 +189,11 @@ class Executor:
     @property
     def queued(self) -> tuple[CodeUnit, ...]:
         """Sealed units not yet started; excludes the unsealed ``parser_state.pending`` tail."""
-        return tuple(self._queued)
+        return tuple(
+            item if isinstance(item, CodeUnit) else item.unit
+            for item in self._queued
+            if isinstance(item, CodeUnit) or item.depth == 0 and item.kind in {"statement", "exit"} and item.unit.start != self._started_block
+        )
 
     @property
     def events(self) -> tuple[Execution, ...]:
@@ -137,7 +208,12 @@ class Executor:
             raise RuntimeError("executor already has an active operation")
         if self._state != "open":
             raise RuntimeError(f"executor is {self._state}")
+        self._check_owner()
         self._busy = True
+
+    def _check_owner(self) -> None:
+        if self._frames and self._owner is not asyncio.current_task():
+            raise RuntimeError("open streaming blocks must be resumed and closed in their owning task")
 
     def _syntax_error(self, error_type: type[SyntaxError], message: str, statement: CodeUnit, node: ast.stmt, *, shifted: bool = False) -> SyntaxError:
         line = node.lineno - (statement.start_line - 1 if shifted else 0)
@@ -145,20 +221,27 @@ class Executor:
         column = _character_column(text, node.col_offset + 1)
         return error_type(message, (self._parser.filename, statement.start_line + line - 1, column, text))
 
-    def _compile(self, statement: CodeUnit) -> CodeType:
-        tree = _tree(statement.source, self._parser.filename, self._flags, statement.start_line)
+    def _compile(self, statement: CodeUnit, tree: ast.Module | None = None) -> CodeType:
+        if Block.MODULE not in self._stream_blocks:
+            # Whole-module mode compiles once and keeps native global/annotation
+            # semantics. Incremental-unit restrictions do not apply here.
+            return compile(statement.source, self._parser.filename, "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
+        shifted = tree is not None
+        if tree is None:
+            tree = _tree(statement.source, self._parser.filename, self._flags, statement.start_line)
         scope = _ModuleScope()
         scope.visit(tree)
         if scope.globals:
-            raise self._syntax_error(UnsupportedSyntaxError, "module-scope global declarations are unsupported across incremental compilation units", statement, scope.globals[0])
+            raise self._syntax_error(UnsupportedSyntaxError, "module-scope global declarations are unsupported across incremental compilation units", statement, scope.globals[0], shifted=shifted)
         future = [node for node in tree.body if isinstance(node, ast.ImportFrom) and node.module == "__future__"]
         if future and not self._prologue:
-            raise self._syntax_error(SyntaxError, "from __future__ imports must occur at the beginning of the stream", statement, future[0])
+            raise self._syntax_error(SyntaxError, "from __future__ imports must occur at the beginning of the stream", statement, future[0], shifted=shifted)
         docstring = bool(tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Constant) and isinstance(tree.body[0].value.value, str))
         if docstring and not self._first:
             # Each code object otherwise treats its first string as a new module docstring.
             tree.body.insert(0, ast.copy_location(ast.Pass(), tree.body[0]))
-        ast.increment_lineno(tree, statement.start_line - 1)
+        if not shifted:
+            ast.increment_lineno(tree, statement.start_line - 1)
         try:
             code = compile(tree, self._parser.filename, "exec", flags=self._flags, dont_inherit=True)
         except SyntaxError as error:
@@ -193,7 +276,9 @@ class Executor:
             self._first = False
         return cast(CodeType, code)
 
-    async def _run(self, statement: CodeUnit) -> Execution:
+    async def _run(self, statement: CodeUnit | BlockEvent) -> Execution | None:
+        if isinstance(statement, BlockEvent):
+            return await self._run_block(statement)
         started = monotonic()
         try:
             task = asyncio.current_task()
@@ -218,6 +303,160 @@ class Executor:
         self._events.append(event)
         return event
 
+    async def _evaluate(self, code: CodeType) -> _Evaluation:
+        try:
+            result = eval(code, self.namespace, self.namespace)
+            # Await only syntactic top-level await, never an ordinary expression
+            # whose value happens to be an awaitable (e.g. a context manager).
+            if code.co_flags & inspect.CO_COROUTINE:
+                result = await result
+        except BaseException as error:  # noqa: BLE001 - the enclosing streamed with must see the original exception.
+            cause = error.__cause__
+            # Python 3.11 wraps StopIteration at this artificial module-coroutine
+            # boundary. A real user-coroutine wrapper has already passed through
+            # our frame, so it must retain its native RuntimeError semantics.
+            if code.co_flags & inspect.CO_COROUTINE and type(error) is RuntimeError and isinstance(cause, StopIteration) and _has_frame(cause, code) and not _has_frame(error, code):
+                error = cause
+            return _Evaluation(error=error)
+        return _Evaluation(value=result)
+
+    async def _close_frame(self, frame: _Frame, error: BaseException | None, *, fatal: bool = False) -> BaseException | None:
+        task = asyncio.current_task()
+        cancellations = task.cancelling() if task is not None else 0
+        while frame.scopes:
+            scope = frame.scopes.pop()
+            suppressed = False
+            try:
+                remaining = await scope.close(error)
+                suppressed = error is not None and remaining is None
+                if not suppressed:
+                    error = remaining
+            except BaseException as replacement:  # noqa: BLE001 - outer exits must receive cleanup failures, including cancellation.
+                error = replacement
+            # A cleanup can swallow a newly delivered cancellation. Preserve it
+            # before another manager could mistake this for normal completion.
+            if task is not None and task.cancelling() > cancellations:
+                cancellations = task.cancelling()
+                fatal = True
+                if suppressed or error is None:
+                    cancellation = asyncio.CancelledError()
+                    cancellation.__context__ = error
+                    error = cancellation
+            if suppressed and not fatal:
+                error = None
+        return error
+
+    async def _unwind(self, error: BaseException, *, fatal: bool = False) -> BaseException | None:
+        current: BaseException | None = error
+        task = asyncio.current_task()
+        cancellations = task.cancelling() if task is not None else 0
+        # Keep structural frames until parser exits arrive, even after resources
+        # close: a suppressed exception must still skip its unread suite.
+        for frame in reversed(self._frames):
+            frame.active = frame.parent_active = False
+            current = await self._close_frame(frame, current, fatal=fatal)
+            fatal |= task is not None and task.cancelling() > cancellations
+            if current is None:
+                # Suppression exits this with statement. Its unread body stays
+                # inactive, while the enclosing suite may continue when it closes.
+                return None
+        return current
+
+    async def _fail(self, error: BaseException) -> BaseException:
+        # Source failure/cancellation is never successful EOF. Even a manager
+        # that suppresses it cannot authorize more execution or a normal commit.
+        remaining = await self._unwind(error, fatal=True)
+        if remaining is not None:
+            error = remaining
+        self._frames.clear()
+        self._owner = None
+        self._error = error
+        self._state = "failed"
+        return error
+
+    async def _run_block(self, item: BlockEvent) -> Execution | None:
+        if item.kind == "enter" and item.depth == 0:
+            self._started_block = item.unit.start
+        started = monotonic()
+        task = asyncio.current_task()
+        cancellations = task.cancelling() if task is not None else 0
+        try:
+            await asyncio.sleep(0)
+            node = item.node
+            code = None
+            bindings: list[tuple[CodeType, tuple[CodeType, int] | None]] = []
+            if item.kind == "statement":
+                assert isinstance(node, ast.Module)
+                code = self._compile(item.unit, node)
+            elif item.kind in {"enter", "branch"}:
+                self._first = self._prologue = False
+                if isinstance(node, ast.If):
+                    code = compile(ast.Expression(node.test), self._parser.filename, "eval", flags=self._flags, dont_inherit=True)
+                elif isinstance(node, (ast.With, ast.AsyncWith)):
+                    for context in node.items:
+                        expression = compile(ast.Expression(context.context_expr), self._parser.filename, "eval", flags=self._flags, dont_inherit=True)
+                        binding = compile_binding(context.optional_vars, self._parser.filename, self._flags) if context.optional_vars is not None else None
+                        bindings.append((expression, binding))
+            # Compile even inactive suites, but never let a with suppress a
+            # compiler error. Only actual user-code execution is handled below.
+        except BaseException:
+            self._failed_unit = item.unit
+            raise
+        try:
+            if item.kind == "enter":
+                active = not self._frames or self._frames[-1].active
+                frame = _Frame(started, active, active)
+                self._frames.append(frame)
+                self._owner = task
+                if isinstance(node, ast.If):
+                    assert code is not None
+                    frame.active = frame.taken = active and bool((await self._evaluate(code)).unwrap())
+                elif active:
+                    for expression, binding in bindings:
+                        manager = (await self._evaluate(expression)).unwrap()
+                        scope, value = await Scope.open(manager, isinstance(node, ast.AsyncWith))
+                        if scope is None:
+                            reraise(value)
+                        frame.scopes.append(scope)
+                        if binding is not None:
+                            assignment, index = binding
+                            constants = list(assignment.co_consts)
+                            constants[index] = value
+                            (await self._evaluate(assignment.replace(co_consts=tuple(constants)))).unwrap()
+            elif item.kind == "branch":
+                frame = self._frames[-1]
+                frame.active = frame.parent_active and not frame.taken and (code is None or bool((await self._evaluate(code)).unwrap()))
+                frame.taken |= frame.active
+            elif item.kind == "statement":
+                assert code is not None
+                if not self._frames or self._frames[-1].active:
+                    (await self._evaluate(code)).unwrap()
+            else:
+                frame = self._frames.pop()
+                started = frame.started
+                error = await self._close_frame(frame, None)
+                if error is not None:
+                    reraise(error)
+                if not self._frames:
+                    self._owner = None
+            if task is not None and task.cancelling() > cancellations:
+                raise asyncio.CancelledError
+        except BaseException as error:  # noqa: BLE001 - native with may suppress any user exception.
+            self._failed_unit = item.unit
+            fatal = task is not None and task.cancelling() > cancellations
+            remaining = await self._unwind(error, fatal=fatal)
+            if remaining is not None:
+                reraise(remaining)
+            if task is not None and task.cancelling() > cancellations:
+                raise asyncio.CancelledError
+            self._failed_unit = None
+        if item.depth == 0 and item.kind in {"statement", "exit"}:
+            self._started_block = None
+            event = Execution(len(self._events), item.unit, started, monotonic())
+            self._events.append(event)
+            return event
+        return None
+
     async def feed(self, delta: str) -> tuple[Execution, ...]:
         """Append new source and execute its sealed units in order.
 
@@ -229,11 +468,14 @@ class Executor:
             self._queued.extend(self._parser.feed(delta))
             events = []
             while self._queued:
-                events.append(await self._run(self._queued.popleft()))
+                event = await self._run(self._queued.popleft())
+                if event is not None:
+                    events.append(event)
             return tuple(events)
         except BaseException as error:
-            self._error = error
-            self._state = "failed"
+            failure = await self._fail(error)
+            if failure is not error:
+                reraise(failure)
             raise
         finally:
             self._busy = False
@@ -249,12 +491,15 @@ class Executor:
             self._queued.extend(self._parser.finish())
             events = []
             while self._queued:
-                events.append(await self._run(self._queued.popleft()))
+                event = await self._run(self._queued.popleft())
+                if event is not None:
+                    events.append(event)
             self._state = "finished"
             return tuple(events)
         except BaseException as error:
-            self._error = error
-            self._state = "failed"
+            failure = await self._fail(error)
+            if failure is not error:
+                reraise(failure)
             raise
         finally:
             self._busy = False
@@ -263,8 +508,38 @@ class Executor:
         """Abandon pending source after a transport failure, retaining it for diagnostics."""
         if self._busy:
             raise RuntimeError("cancel the active operation before aborting")
+        if any(frame.scopes for frame in self._frames):
+            raise RuntimeError("open contexts require `await executor.aclose()`")
         if self._state == "open":
+            self._frames.clear()
+            self._owner = None
             self._state = "aborted"
+
+    async def aclose(self) -> None:
+        """Abandon source and await open context exits without declaring EOF."""
+        if self._busy:
+            raise RuntimeError("cancel the active operation before closing")
+        if self._state != "open":
+            return
+        self._enter()
+        try:
+            task = asyncio.current_task()
+            cancellations = task.cancelling() if task is not None else 0
+            abandoned = GeneratorExit()
+            error = await self._unwind(abandoned, fatal=True)
+            if error is not abandoned and error is not None:
+                reraise(error)
+            if task is not None and task.cancelling() > cancellations:
+                raise asyncio.CancelledError
+            self._state = "aborted"
+        except BaseException as error:
+            self._error = error
+            self._state = "failed"
+            raise
+        finally:
+            self._frames.clear()
+            self._owner = None
+            self._busy = False
 
     async def stream(self, chunks: AsyncIterable[str]) -> AsyncGenerator[Execution, None]:
         """Execute a source iterator, retaining diagnostics on this executor.
@@ -280,7 +555,8 @@ class Executor:
         try:
             iterator = aiter(chunks)
             while True:
-                # Each anext may be resumed by a different task (e.g. wait_for).
+                self._check_owner()
+                # With no open block, each anext may resume in a different task.
                 task = asyncio.current_task()
                 cancellations = task.cancelling() if task is not None else 0
                 try:
@@ -298,22 +574,25 @@ class Executor:
                     await asyncio.sleep(0)
                 while self._queued:
                     event = await self._run(self._queued.popleft())
-                    yielding = True
-                    yield event
-                    yielding = False
+                    if event is not None:
+                        yielding = True
+                        yield event
+                        yielding = False
             self._queued.extend(self._parser.finish())
             while self._queued:
                 event = await self._run(self._queued.popleft())
-                yielding = True
-                yield event
-                yielding = False
+                if event is not None:
+                    yielding = True
+                    yield event
+                    yielding = False
             self._state = "finished"
         except BaseException as error:
             # Only GeneratorExit injected at our event yield is consumer closure.
             # The same exception from a source or executed unit is a real failure.
             if not (yielding and isinstance(error, GeneratorExit)):
-                self._error = error
-                self._state = "failed"
+                failure = await self._fail(error)
+                if failure is not error:
+                    reraise(failure)
             raise
         finally:
             if self._state == "open":
@@ -345,13 +624,13 @@ class Executor:
                 self._busy = False
 
 
-async def incremental_exec(chunks: AsyncIterable[str], namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>") -> dict[str, Any]:
+async def incremental_exec(chunks: AsyncIterable[str], namespace: dict[str, Any] | None = None, *, filename: str = "<partial-python>", stream_blocks: Block = Block.MODULE) -> dict[str, Any]:
     """Execute validated source as it arrives and return the namespace used.
 
     Normal iterator exhaustion authorizes EOF. The source adapter must raise on
     truncation or failure. Use ``Executor.stream`` for events and diagnostics.
     """
-    executor = Executor(namespace, filename=filename)
+    executor = Executor(namespace, filename=filename, stream_blocks=stream_blocks)
     async with aclosing(executor.stream(chunks)) as events:
         async for _ in events:
             pass

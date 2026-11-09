@@ -38,7 +38,7 @@ async def record_and_execute(executor, source_file, chunks):
         if task is not None and task.cancelling() > cancellations:
             raise asyncio.CancelledError
     except BaseException:
-        executor.abort()
+        await executor.aclose()
         raise
     else:
         await executor.finish()  # Only normal source exhaustion authorizes EOF.
